@@ -2,6 +2,7 @@ package gitfs
 
 import (
 	"context"
+	"github.com/adlternative/tinygitfs/pkg/data"
 	"os"
 	"runtime"
 	"syscall"
@@ -25,6 +26,7 @@ func defaultNewNode(dataSource DataSource, ino metadata.Ino, name string) fs.Ino
 
 type DataSource struct {
 	redisMeta *metadata.RedisMeta
+	minioData *data.MinioData
 }
 
 type Node struct {
@@ -41,7 +43,7 @@ type GitFs struct {
 	Node
 }
 
-func NewGitFs(ctx context.Context, metaDataUrl string) (*GitFs, error) {
+func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) (*GitFs, error) {
 	redisMeta, err := metadata.NewRedisMeta(metaDataUrl)
 	if err != nil {
 		return nil, err
@@ -51,12 +53,20 @@ func NewGitFs(ctx context.Context, metaDataUrl string) (*GitFs, error) {
 		return nil, err
 	}
 
+	minioData, err := data.NewMinioData(dataOption)
+	if err != nil {
+		return nil, err
+	}
+
 	return &GitFs{
 		Node: Node{
-			inode:      1,
-			name:       "",
-			DataSource: DataSource{redisMeta: redisMeta},
-			newNodeFn:  defaultNewNode,
+			inode: 1,
+			name:  "",
+			DataSource: DataSource{
+				redisMeta: redisMeta,
+				minioData: minioData,
+			},
+			newNodeFn: defaultNewNode,
 		},
 	}, nil
 }
@@ -248,8 +258,8 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	return syscall.F_OK
 }
 
-func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string) error {
-	gitfs, err := NewGitFs(ctx, metaDataUrl)
+func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, dataOption *data.Option) error {
+	gitfs, err := NewGitFs(ctx, metaDataUrl, dataOption)
 	if err != nil {
 		return err
 	}
