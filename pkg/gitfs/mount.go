@@ -67,6 +67,9 @@ var _ = (fs.NodeMkdirer)((*Node)(nil))
 var _ = (fs.NodeReaddirer)((*Node)(nil))
 var _ = (fs.NodeOpendirer)((*Node)(nil))
 var _ = (fs.NodeLookuper)((*Node)(nil))
+var _ = (fs.NodeRmdirer)((*Node)(nil))
+var _ = (fs.NodeUnlinker)((*Node)(nil))
+var _ = (fs.NodeSetattrer)((*Node)(nil))
 
 func (node *Node) Opendir(ctx context.Context) syscall.Errno {
 	log.WithFields(
@@ -138,7 +141,6 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 		}).Info("Mkdir")
 	attr, ino, eno := node.redisMeta.MkNod(ctx, node.inode, metadata.TypeDirectory, name, mode, 0)
 	if eno != 0 {
-		log.Printf("%s %o", name, mode)
 		return nil, eno
 	}
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
@@ -192,6 +194,58 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 		Ino:  uint64(ino),
 		Gen:  1,
 	}), 0, 0, 0
+}
+
+func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
+	log.WithFields(
+		log.Fields{
+			"name":         name,
+			"parent inode": node.inode,
+		}).Info("Rmdir")
+	return node.redisMeta.Rmdir(ctx, node.inode, name)
+}
+
+func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
+	log.WithFields(
+		log.Fields{
+			"name":         name,
+			"parent inode": node.inode,
+		}).Info("Unlink")
+	return node.redisMeta.Unlink(ctx, node.inode, name)
+}
+
+func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	var fields log.Fields
+
+	fields["parent inode"] = node.inode
+
+	if atime, ok := in.GetATime(); ok {
+		fields["atime"] = atime
+	}
+	if ctime, ok := in.GetCTime(); ok {
+		fields["ctime"] = ctime
+	}
+	if uid, ok := in.GetUID(); ok {
+		fields["uid"] = uid
+	}
+	if gid, ok := in.GetUID(); ok {
+		fields["gid"] = gid
+	}
+	if mode, ok := in.GetMode(); ok {
+		fields["mode"] = mode
+	}
+	if size, ok := in.GetSize(); ok {
+		fields["mode"] = size
+	}
+
+	log.WithFields(fields).Info("Setattr")
+
+	attr, eno := node.redisMeta.Setattr(ctx, node.inode, in)
+	if eno != syscall.F_OK {
+		return eno
+	}
+	metadata.ToAttrOut(node.inode, attr, &out.Attr)
+	return syscall.F_OK
 }
 
 func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string) error {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/hanwen/go-fuse/v2/fuse"
 	"os"
 	"strings"
 	"syscall"
@@ -227,6 +228,116 @@ func (r *RedisMeta) Getattr(ctx context.Context, ino Ino) (*Attr, syscall.Errno)
 		return nil, errno(err)
 	}
 	return attr, 0
+}
+
+func (r *RedisMeta) setattr(ctx context.Context, ino Ino, attr *Attr) error {
+	jsonAttr, err := json.Marshal(&attr)
+	if err != nil {
+		return err
+	}
+	_, err = r.rdb.Set(ctx, inodeKey(ino), jsonAttr, 0).Result()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *RedisMeta) Setattr(ctx context.Context, ino Ino, in *fuse.SetAttrIn) (*Attr, syscall.Errno) {
+	attr, eno := r.Getattr(ctx, ino)
+	if eno != syscall.F_OK {
+		return nil, eno
+	}
+
+	if atime, ok := in.GetATime(); ok {
+		SetTime(&attr.Atime, &attr.Atimensec, atime)
+	}
+	if ctime, ok := in.GetCTime(); ok {
+		SetTime(&attr.Ctime, &attr.Ctimensec, ctime)
+	}
+
+	if uid, ok := in.GetUID(); ok {
+		attr.Uid = uid
+	}
+	if gid, ok := in.GetUID(); ok {
+		attr.Gid = gid
+	}
+	if mode, ok := in.GetMode(); ok {
+		attr.Mode = uint16(mode)
+	}
+	if size, ok := in.GetSize(); ok {
+		attr.Length = size
+	}
+	if err := r.setattr(ctx, ino, attr); err != nil {
+		return nil, errno(err)
+	}
+
+	return attr, syscall.F_OK
+}
+
+// Rmdir remove a directory with name in parent inode
+func (r *RedisMeta) Rmdir(ctx context.Context, parent Ino, name string) syscall.Errno {
+	dentry, find, err := r.GetDentry(ctx, parent, name)
+	if err != nil {
+		return errno(err)
+	}
+	if !find {
+		return syscall.ENOENT
+	}
+	attr, eno := r.Getattr(ctx, dentry.Ino)
+	if eno != syscall.F_OK {
+		return eno
+	}
+	if attr.Typ != TypeDirectory {
+		return syscall.EPERM
+	}
+	if attr.Nlink != 2 {
+		return syscall.ENOTEMPTY
+	}
+	attr.Nlink -= 2
+	attr.Parent--
+
+	r.rdb.HDel(ctx, dentryKey(parent), name)
+	r.rdb.Del(ctx, inodeKey(dentry.Ino))
+
+	pattr, eno := r.Getattr(ctx, parent)
+	pattr.Nlink--
+	if err := r.setattr(ctx, parent, pattr); err != nil {
+		return errno(err)
+	}
+
+	return syscall.F_OK
+}
+
+func (r *RedisMeta) Unlink(ctx context.Context, parent Ino, name string) syscall.Errno {
+	dentry, find, err := r.GetDentry(ctx, parent, name)
+	if err != nil {
+		return errno(err)
+	}
+	if !find {
+		return syscall.ENOENT
+	}
+	attr, eno := r.Getattr(ctx, dentry.Ino)
+	if eno != syscall.F_OK {
+		return eno
+	}
+
+	attr.Parent--
+	attr.Nlink--
+
+	if attr.Nlink == 0 {
+		r.rdb.HDel(ctx, dentryKey(parent), name)
+		r.rdb.Del(ctx, inodeKey(dentry.Ino))
+	} else if err := r.setattr(ctx, dentry.Ino, attr); err != nil {
+		return errno(err)
+	}
+
+	pattr, eno := r.Getattr(ctx, parent)
+	pattr.Nlink--
+	if err := r.setattr(ctx, parent, pattr); err != nil {
+		return errno(err)
+	}
+
+	return syscall.F_OK
 }
 
 // nextInode get next inode which can be used
