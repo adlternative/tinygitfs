@@ -302,10 +302,10 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	return syscall.F_OK
 }
 
-func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, dataOption *data.Option) error {
+func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, dataOption *data.Option) (*fuse.Server, error) {
 	gitfs, err := NewGitFs(ctx, metaDataUrl, dataOption)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	opts := fuse.MountOptions{
@@ -337,10 +337,8 @@ func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, d
 		MountOptions: opts,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	server.Wait()
-
-	return nil
+	return server, nil
 }

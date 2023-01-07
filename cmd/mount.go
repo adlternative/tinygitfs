@@ -6,6 +6,10 @@ package cmd
 import (
 	"context"
 	"github.com/adlternative/tinygitfs/pkg/data"
+	log "github.com/sirupsen/logrus"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/adlternative/tinygitfs/pkg/gitfs"
 	"github.com/spf13/cobra"
@@ -24,8 +28,36 @@ var mountCmd = &cobra.Command{
 	Long:  `tinygitfs mount <dir>`,
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := context.Background()
-		return gitfs.Mount(ctx, args[0], debug, metadataUrl, &dataOption)
+		ctx, cancel := context.WithCancel(context.Background())
+		signals := []os.Signal{syscall.SIGTERM, syscall.SIGINT}
+		termCh := make(chan os.Signal, len(signals))
+		errCh := make(chan error)
+		signal.Notify(termCh, signals...)
+
+		server, err := gitfs.Mount(ctx, args[0], debug, metadataUrl, &dataOption)
+		if err != nil {
+			errCh <- err
+		}
+
+		go func() {
+			server.Wait()
+		}()
+
+		// wait for done
+		select {
+		case s := <-termCh:
+			log.Infof("received signal %q\n", s)
+			cancel()
+			if err := server.Unmount(); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+		case err := <-errCh:
+			cancel()
+			return err
+		}
+
+		return nil
 	},
 }
 
