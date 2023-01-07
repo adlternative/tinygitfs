@@ -63,7 +63,6 @@ func (r *RedisMeta) Init(ctx context.Context) error {
 		Length: 4 << 10,
 		Uid:    uint32(uid),
 		Gid:    uint32(gid),
-		Parent: 1,
 	}
 	ts := time.Now()
 	SetTime(&rootAttr.Atime, &rootAttr.Atimensec, ts)
@@ -112,6 +111,20 @@ func (r *RedisMeta) GetDentry(ctx context.Context, parent Ino, name string) (*De
 		return nil, false, err
 	}
 	return d, true, nil
+}
+
+func (r *RedisMeta) SetDentry(ctx context.Context, parent Ino, name string, inode Ino, typ uint8) error {
+	jsonDentry, err := json.Marshal(&DentryData{
+		Ino: inode,
+		Typ: typ,
+	})
+	if err != nil {
+		return err
+	}
+	return r.rdb.HSet(ctx, dentryKey(parent), name, jsonDentry).Err()
+}
+func (r *RedisMeta) DelDentry(ctx context.Context, parent Ino, name string) error {
+	return r.rdb.HDel(ctx, dentryKey(parent), name).Err()
 }
 
 // GetDirectoryLength get the dentries' number of the directory with specified inode
@@ -164,7 +177,6 @@ func (r *RedisMeta) MkNod(ctx context.Context, parent Ino, _type uint8, name str
 	attr.Rdev = dev
 	attr.Uid = uint32(os.Getuid())
 	attr.Gid = uint32(os.Getgid())
-	attr.Parent = parent
 
 	if _type == TypeDirectory {
 		attr.Nlink = 2
@@ -192,26 +204,17 @@ func (r *RedisMeta) MkNod(ctx context.Context, parent Ino, _type uint8, name str
 		return attr, 0, syscall.EEXIST
 	}
 
-	pattr, eno := r.Getattr(ctx, parent)
-	if eno != 0 {
-		log.WithField("errno", eno).Error("get parent attr failed")
-		return nil, 0, eno
-	}
-
-	pattr.Nlink++
-
 	jsonAttr, err := json.Marshal(attr)
 	r.rdb.Set(ctx, inodeKey(ino), jsonAttr, 0)
 
-	jsonPAttr, err := json.Marshal(pattr)
-	r.rdb.Set(ctx, inodeKey(parent), jsonPAttr, 0)
-
-	jsonDentry, err := json.Marshal(&DentryData{
-		Ino: ino,
-		Typ: _type,
-	})
-
-	r.rdb.HSet(ctx, dentryKey(parent), name, jsonDentry)
+	err = r.SetDentry(ctx, parent, name, ino, _type)
+	if err != nil {
+		return nil, 0, errno(err)
+	}
+	eno := r.Ref(ctx, parent)
+	if eno != syscall.F_OK {
+		return nil, 0, eno
+	}
 
 	return attr, ino, 0
 }
@@ -294,7 +297,6 @@ func (r *RedisMeta) Rmdir(ctx context.Context, parent Ino, name string) syscall.
 		return syscall.ENOTEMPTY
 	}
 	attr.Nlink -= 2
-	attr.Parent--
 
 	r.rdb.HDel(ctx, dentryKey(parent), name)
 	r.rdb.Del(ctx, inodeKey(dentry.Ino))
@@ -308,8 +310,67 @@ func (r *RedisMeta) Rmdir(ctx context.Context, parent Ino, name string) syscall.
 	return syscall.F_OK
 }
 
+func (r *RedisMeta) Ref(ctx context.Context, inode Ino) syscall.Errno {
+	attr, eno := r.Getattr(ctx, inode)
+	if eno != syscall.F_OK {
+		return eno
+	}
+	attr.Nlink++
+	err := r.setattr(ctx, inode, attr)
+	if err != nil {
+		return errno(err)
+	}
+	return syscall.F_OK
+}
+
+func (r *RedisMeta) Link(ctx context.Context, parent Ino, target Ino, name string) (*Attr, syscall.Errno) {
+	return r.link(ctx, parent, target, name, false)
+}
+
+func (r *RedisMeta) link(ctx context.Context, parent Ino, target Ino, name string, allowLinkDir bool) (*Attr, syscall.Errno) {
+	_, find, err := r.GetDentry(ctx, parent, name)
+	if err != nil {
+		return nil, errno(err)
+	}
+	if find {
+		return nil, syscall.EEXIST
+	}
+
+	// target.link++
+	attr, eno := r.Getattr(ctx, target)
+	if eno != syscall.F_OK {
+		return nil, eno
+	}
+	if !allowLinkDir && attr.Typ == TypeDirectory {
+		return nil, syscall.EISDIR
+	}
+
+	attr.Nlink++
+	r.setattr(ctx, target, attr)
+
+	// d[parent][name] = target
+	err = r.SetDentry(ctx, parent, name, target, attr.Typ)
+	if err != nil {
+		return nil, errno(err)
+	}
+
+	// parent.link++
+	eno = r.Ref(ctx, parent)
+	if eno != syscall.F_OK {
+		return nil, eno
+	}
+	return attr, syscall.F_OK
+}
+
 func (r *RedisMeta) Unlink(ctx context.Context, parent Ino, name string) syscall.Errno {
+	return r.unlink(ctx, parent, name, false)
+}
+
+func (r *RedisMeta) unlink(ctx context.Context, parent Ino, name string, allowUnlinkDir bool) syscall.Errno {
 	dentry, find, err := r.GetDentry(ctx, parent, name)
+	if !allowUnlinkDir && dentry.Typ == TypeDirectory {
+		return syscall.EISDIR
+	}
 	if err != nil {
 		return errno(err)
 	}
@@ -321,11 +382,10 @@ func (r *RedisMeta) Unlink(ctx context.Context, parent Ino, name string) syscall
 		return eno
 	}
 
-	attr.Parent--
 	attr.Nlink--
 
+	r.rdb.HDel(ctx, dentryKey(parent), name)
 	if attr.Nlink == 0 {
-		r.rdb.HDel(ctx, dentryKey(parent), name)
 		r.rdb.Del(ctx, inodeKey(dentry.Ino))
 	} else if err := r.setattr(ctx, dentry.Ino, attr); err != nil {
 		return errno(err)
@@ -335,6 +395,51 @@ func (r *RedisMeta) Unlink(ctx context.Context, parent Ino, name string) syscall
 	pattr.Nlink--
 	if err := r.setattr(ctx, parent, pattr); err != nil {
 		return errno(err)
+	}
+
+	return syscall.F_OK
+}
+
+func (r *RedisMeta) Rename(ctx context.Context, parent Ino, oldName string, newParent Ino, newName string) syscall.Errno {
+	if parent == newParent && oldName == newName {
+		return syscall.F_OK
+	}
+
+	dentry, find, err := r.GetDentry(ctx, parent, oldName)
+	if err != nil {
+		return errno(err)
+	}
+	if !find {
+		return syscall.ENOENT
+	}
+
+	replaceDentry, find, err := r.GetDentry(ctx, newParent, newName)
+	if err != nil {
+		return errno(err)
+	}
+	// if newDir[newName] exists, unlink it
+	if find {
+		if replaceDentry.Typ == TypeDirectory {
+			return syscall.EISDIR
+		}
+		if dentry.Typ == TypeDirectory {
+			return syscall.ENOTDIR
+		}
+
+		eno := r.Unlink(ctx, newParent, newName)
+		if eno != syscall.F_OK {
+			return eno
+		}
+	}
+	// link newDir[newName]
+	_, eno := r.link(ctx, newParent, dentry.Ino, newName, true)
+	if eno != syscall.F_OK {
+		return eno
+	}
+	// unlink
+	eno = r.unlink(ctx, parent, oldName, true)
+	if eno != syscall.F_OK {
+		return eno
 	}
 
 	return syscall.F_OK

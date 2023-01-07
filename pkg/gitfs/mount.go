@@ -80,6 +80,49 @@ var _ = (fs.NodeLookuper)((*Node)(nil))
 var _ = (fs.NodeRmdirer)((*Node)(nil))
 var _ = (fs.NodeUnlinker)((*Node)(nil))
 var _ = (fs.NodeSetattrer)((*Node)(nil))
+var _ = (fs.NodeRenamer)((*Node)(nil))
+var _ = (fs.NodeLinker)((*Node)(nil))
+
+func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string, out *fuse.EntryOut) (newNode *fs.Inode, errno syscall.Errno) {
+	log.WithFields(
+		log.Fields{
+			"name":   name,
+			"target": target.EmbeddedInode(),
+			"inode":  node.inode,
+		}).Info("Link")
+
+	targetInode := metadata.Ino(target.EmbeddedInode().StableAttr().Ino)
+	attr, eno := node.redisMeta.Link(ctx, node.inode, targetInode, name)
+	if eno != syscall.F_OK {
+		return nil, eno
+	}
+
+	metadata.ToAttrOut(targetInode, attr, &out.Attr)
+
+	return node.NewInode(ctx, node.newNodeFn(node.DataSource, targetInode, name), fs.StableAttr{
+		Mode: uint32(attr.Mode),
+		Ino:  uint64(targetInode),
+		Gen:  1,
+	}), syscall.F_OK
+}
+
+func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	newParentInode := newParent.EmbeddedInode().StableAttr().Ino
+	if newParentInode == 0 {
+		newParentInode = 1
+	}
+
+	log.WithFields(
+		log.Fields{
+			"name":      name,
+			"newParent": newParent.EmbeddedInode(),
+			"newName":   newName,
+			"flags":     flags,
+			"inode":     node.inode,
+		}).Info("Rename")
+
+	return node.redisMeta.Rename(ctx, node.inode, name, metadata.Ino(newParentInode), newName)
+}
 
 func (node *Node) Opendir(ctx context.Context) syscall.Errno {
 	log.WithFields(
@@ -225,7 +268,8 @@ func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 }
 
 func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	var fields log.Fields
+	fields := log.Fields{}
+	fields = make(map[string]interface{})
 
 	fields["parent inode"] = node.inode
 
@@ -245,7 +289,7 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 		fields["mode"] = mode
 	}
 	if size, ok := in.GetSize(); ok {
-		fields["mode"] = size
+		fields["size"] = size
 	}
 
 	log.WithFields(fields).Info("Setattr")

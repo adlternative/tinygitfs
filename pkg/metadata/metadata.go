@@ -44,7 +44,7 @@ type Dentry struct {
 
 // Attr is inode attributes information
 type Attr struct {
-	Flags     uint8  `json:"flags"`               // reserved flags
+	Flags     uint8  `json:"flags,omitempty"`     // reserved flags
 	Typ       uint8  `json:"type,omitempty"`      // type of a node
 	Mode      uint16 `json:"mode,omitempty"`      // permission mode
 	Uid       uint32 `json:"uid,omitempty"`       // owner id
@@ -58,7 +58,6 @@ type Attr struct {
 	Nlink     uint32 `json:"nlink,omitempty"`     // number of links (sub-directories or hardlinks)
 	Length    uint64 `json:"length,omitempty"`    // length of regular file
 	Rdev      uint32 `json:"rdev,omitempty"`      // device number
-	Parent    Ino    `json:"parent,omitempty"`    // inode of parent, only for Directory
 }
 
 type DirStream struct {
