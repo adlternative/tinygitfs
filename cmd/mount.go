@@ -27,37 +27,35 @@ var mountCmd = &cobra.Command{
 	Short: "mount gitfs",
 	Long:  `tinygitfs mount <dir>`,
 	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
+	Run: func(cmd *cobra.Command, args []string) {
 		ctx, cancel := context.WithCancel(context.Background())
 		signals := []os.Signal{syscall.SIGTERM, syscall.SIGINT}
 		termCh := make(chan os.Signal, len(signals))
-		errCh := make(chan error)
 		signal.Notify(termCh, signals...)
 
 		server, err := gitfs.Mount(ctx, args[0], debug, metadataUrl, &dataOption)
 		if err != nil {
-			errCh <- err
+			log.WithError(err).Errorf("gitfs mount failed")
+			return
 		}
 
 		go func() {
-			server.Wait()
+			// wait for done
+			select {
+			case <-ctx.Done():
+			case s := <-termCh:
+				log.Infof("received signal %q\n", s)
+				cancel()
+				if err := server.Unmount(); err != nil {
+					if err != nil {
+						log.WithError(err).Errorf("gitfs unmount failed")
+						return
+					}
+				}
+			}
 		}()
 
-		// wait for done
-		select {
-		case s := <-termCh:
-			log.Infof("received signal %q\n", s)
-			cancel()
-			if err := server.Unmount(); err != nil {
-				return err
-			}
-		case <-ctx.Done():
-		case err := <-errCh:
-			cancel()
-			return err
-		}
-
-		return nil
+		server.Wait()
 	},
 }
 
