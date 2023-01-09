@@ -128,6 +128,16 @@ func dentryKey(inode Ino) string {
 	return "d" + inode.String()
 }
 
+type ChunkAttr struct {
+	Offset      int64  `json:"offset"`
+	Lens        int    `json:"len"`
+	StoragePath string `json:"storagePath"`
+}
+
+func chunkKey(inode Ino) string {
+	return "c" + inode.String()
+}
+
 // SetTime set given time and timesec to given time.Time
 func SetTime(time *uint64, timensec *uint32, t time.Time) {
 	sec := uint64(t.Unix())

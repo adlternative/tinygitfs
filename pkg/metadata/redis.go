@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -458,4 +459,48 @@ func (r *RedisMeta) nextInode(ctx context.Context) (Ino, error) {
 		}
 	}
 	return Ino(ino), err
+}
+
+func (r *RedisMeta) SetChunkMeta(ctx context.Context, inode Ino, pageNum int64, offset int64, lens int, storagePath string) error {
+	jsonChunkAttr, err := json.Marshal(&ChunkAttr{
+		Offset:      offset,
+		Lens:        lens,
+		StoragePath: storagePath,
+	})
+	if err != nil {
+		return err
+	}
+	return r.rdb.HSet(ctx, chunkKey(inode), pageNum, jsonChunkAttr).Err()
+}
+
+func (r *RedisMeta) GetChunkMeta(ctx context.Context, inode Ino, pageNum int64) (*ChunkAttr, bool, error) {
+	chunkAttr := &ChunkAttr{}
+
+	jsonChunkAttr, err := r.rdb.HGet(ctx, chunkKey(inode), strconv.FormatInt(pageNum, 10)).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+
+	err = json.Unmarshal(jsonChunkAttr, chunkAttr)
+	if err != nil {
+		return nil, false, err
+	}
+	return chunkAttr, true, nil
+}
+
+func (r *RedisMeta) WriteUpdate(ctx context.Context, inode Ino, length uint64) syscall.Errno {
+	attr, eno := r.Getattr(ctx, inode)
+	if eno != syscall.F_OK {
+		return eno
+	}
+
+	if attr.Length < length {
+		attr.Length = length
+	}
+	SetTime(&attr.Atime, &attr.Atimensec, time.Now())
+	r.setattr(ctx, inode, attr)
+	return syscall.F_OK
 }

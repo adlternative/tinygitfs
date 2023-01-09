@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"net/url"
@@ -56,12 +57,15 @@ type MinioData struct {
 	ses    *session.Session
 }
 
+const awsDefaultRegion = "us-east-1"
+
 func NewMinioData(dataOption *Option) (*MinioData, error) {
 	uri, err := url.ParseRequestURI(dataOption.EndPoint)
 	if err != nil {
 		return nil, fmt.Errorf("invalid endpoint %s: %s", dataOption.EndPoint, err)
 	}
 	awsConfig := &aws.Config{
+		Region:           aws.String(awsDefaultRegion),
 		Endpoint:         &uri.Host,
 		DisableSSL:       aws.Bool(strings.ToLower(uri.Scheme) != "https"),
 		S3ForcePathStyle: aws.Bool(true),
@@ -120,6 +124,12 @@ func (s *MinioData) Head(key string) (Object, error) {
 }
 
 func (s *MinioData) Get(key string, off, limit int64) (io.ReadCloser, error) {
+	log.WithFields(log.Fields{
+		"key":   key,
+		"off":   off,
+		"limit": limit,
+	}).Info("Minio Get")
+
 	params := &s3.GetObjectInput{Bucket: &s.bucket, Key: &key}
 	if off > 0 || limit > 0 {
 		var r string
@@ -144,6 +154,8 @@ func (s *MinioData) Get(key string, off, limit int64) (io.ReadCloser, error) {
 }
 
 func (s *MinioData) Put(key string, in io.Reader) error {
+	log.WithField("key", key).Info("Minio Put")
+
 	var body io.ReadSeeker
 	if b, ok := in.(io.ReadSeeker); ok {
 		body = b
@@ -306,4 +318,8 @@ func (s *MinioData) ListMultipartUploads(marker string) ([]*PendingPart, string,
 		nextMarker = *result.NextKeyMarker
 	}
 	return parts, nextMarker, nil
+}
+
+func (s *MinioData) Init() error {
+	return s.Create()
 }
