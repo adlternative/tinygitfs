@@ -57,7 +57,7 @@ func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (writt
 			"length": len(data),
 			"offset": off,
 			"inode":  fh.inode,
-		}).Info("Write")
+		}).Debug("Write")
 
 	written, err := fh.pagePool.Write(ctx, data, off)
 	if err != nil {
@@ -78,7 +78,7 @@ func (fh *FileHandler) Read(ctx context.Context, dest []byte, off int64) (fuse.R
 			"dest length": len(dest),
 			"offset":      off,
 			"inode":       fh.inode,
-		}).Info("Read")
+		}).Debug("Read")
 
 	result, err := fh.pagePool.Read(ctx, dest, off)
 	if err != nil {

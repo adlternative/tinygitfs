@@ -23,3 +23,19 @@ func Execute() {
 		log.WithError(err).Fatal("gitfs execute failed")
 	}
 }
+
+var loglevel string
+
+func init() {
+	cobra.OnInitialize(initLog)
+
+	rootCmd.PersistentFlags().StringVar(&loglevel, "loglevel", "info", "log level")
+}
+
+func initLog() {
+	lvl, err := log.ParseLevel(loglevel)
+	if err != nil {
+		panic(err)
+	}
+	log.SetLevel(lvl)
+}

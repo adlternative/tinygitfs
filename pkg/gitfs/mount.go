@@ -90,7 +90,7 @@ func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string
 			"name":   name,
 			"target": target.EmbeddedInode(),
 			"inode":  node.inode,
-		}).Info("Link")
+		}).Trace("Link")
 
 	targetInode := metadata.Ino(target.EmbeddedInode().StableAttr().Ino)
 	attr, eno := node.Meta.Link(ctx, node.inode, targetInode, name)
@@ -120,7 +120,7 @@ func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmb
 			"newName":   newName,
 			"flags":     flags,
 			"inode":     node.inode,
-		}).Info("Rename")
+		}).Trace("Rename")
 
 	return node.Meta.Rename(ctx, node.inode, name, metadata.Ino(newParentInode), newName)
 }
@@ -129,7 +129,7 @@ func (node *Node) Opendir(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
 			"inode": node.inode,
-		}).Info("Opendir")
+		}).Trace("Opendir")
 	return syscall.F_OK
 }
 
@@ -137,7 +137,7 @@ func (node *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
 			"parent inode": node.inode,
-		}).Info("Readdir")
+		}).Trace("Readdir")
 	ds, err := metadata.NewDirStream(ctx, node.inode, node.Meta)
 	if err != nil {
 		return nil, syscall.ENOENT
@@ -149,7 +149,7 @@ func (node *Node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOu
 	log.WithFields(
 		log.Fields{
 			"inode": node.inode,
-		}).Info("Getattr")
+		}).Trace("Getattr")
 
 	attr, eno := node.Meta.Getattr(ctx, node.inode)
 	if eno != 0 {
@@ -164,7 +164,7 @@ func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 		log.Fields{
 			"name":         name,
 			"parent inode": node.inode,
-		}).Info("Lookup")
+		}).Trace("Lookup")
 	entry, find, err := node.Meta.GetDentry(ctx, node.inode, name)
 	if err != nil || !find {
 		return nil, syscall.ENOENT
@@ -192,7 +192,7 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 			"name":         name,
 			"mode":         mode,
 			"parent inode": node.inode,
-		}).Info("Mkdir")
+		}).Trace("Mkdir")
 	attr, ino, eno := node.Meta.MkNod(ctx, node.inode, metadata.TypeDirectory, name, mode, 0)
 	if eno != 0 {
 		return nil, eno
@@ -212,7 +212,7 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 			"mode":         mode,
 			"dev":          dev,
 			"parent inode": node.inode,
-		}).Info("Mknod")
+		}).Trace("Mknod")
 	_type := metadata.GetFiletype(uint16(mode))
 	if _type == 0 {
 		return nil, syscall.EPERM
@@ -237,7 +237,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 			"flags":        flags,
 			"mode":         mode,
 			"parent inode": node.inode,
-		}).Info("Create")
+		}).Trace("Create")
 	attr, ino, eno := node.Meta.MkNod(ctx, node.inode, metadata.TypeFile, name, mode, 0)
 	if eno != 0 {
 		return nil, 0, 0, eno
@@ -271,7 +271,7 @@ func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 		log.Fields{
 			"name":         name,
 			"parent inode": node.inode,
-		}).Info("Rmdir")
+		}).Trace("Rmdir")
 	return node.Meta.Rmdir(ctx, node.inode, name)
 }
 
@@ -280,7 +280,7 @@ func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 		log.Fields{
 			"name":         name,
 			"parent inode": node.inode,
-		}).Info("Unlink")
+		}).Trace("Unlink")
 	return node.Meta.Unlink(ctx, node.inode, name)
 }
 
@@ -309,7 +309,7 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 		fields["size"] = size
 	}
 
-	log.WithFields(fields).Info("Setattr")
+	log.WithFields(fields).Trace("Setattr")
 
 	attr, eno := node.Meta.Setattr(ctx, node.inode, in)
 	if eno != syscall.F_OK {

@@ -128,7 +128,7 @@ func (s *MinioData) Get(key string, off, limit int64) (io.ReadCloser, error) {
 		"key":   key,
 		"off":   off,
 		"limit": limit,
-	}).Info("Minio Get")
+	}).Debug("Minio Get")
 
 	params := &s3.GetObjectInput{Bucket: &s.bucket, Key: &key}
 	if off > 0 || limit > 0 {
@@ -154,7 +154,7 @@ func (s *MinioData) Get(key string, off, limit int64) (io.ReadCloser, error) {
 }
 
 func (s *MinioData) Put(key string, in io.Reader) error {
-	log.WithField("key", key).Info("Minio Put")
+	log.WithField("key", key).Debug("Minio Put")
 
 	var body io.ReadSeeker
 	if b, ok := in.(io.ReadSeeker); ok {
