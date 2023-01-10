@@ -13,7 +13,7 @@ import (
 	"io"
 )
 
-const pageSize = 4 << 20
+const pageSize = 1 << 20
 const poolSize = 64 << 20
 
 type Page struct {
@@ -36,15 +36,31 @@ func NewPage(pageNumber int64) *Page {
 	}
 }
 
-func NewPageWithReader(pageNumber int64, reader io.Reader) (*Page, error) {
+func NewPageWithReader(pageNumber int64, reader io.Reader, totalSize int64) (*Page, error) {
 	page := NewPage(pageNumber)
-	n, err := reader.Read(page.data)
-	if err != nil {
-		if err != io.EOF {
+	curSize := int64(0)
+	for curSize < totalSize {
+		n, err := reader.Read(page.data[curSize:])
+		log.WithFields(log.Fields{
+			"curSize":  curSize,
+			"readSize": n,
+		}).Debug("page read")
+
+		if err != nil {
+			if err == io.EOF {
+				curSize += int64(n)
+				break
+			}
 			return nil, err
 		}
+		curSize += int64(n)
 	}
-	page.SetSize(int64(n))
+
+	log.WithFields(log.Fields{
+		"curSize": curSize,
+	}).Debug("page total")
+
+	page.SetSize(curSize)
 	return page, nil
 
 }
@@ -134,7 +150,7 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 			return fuse.ReadResultData(dest[:totalSize-leftSize]), err
 		}
 		if !find {
-			return fuse.ReadResultData(dest[:totalSize-leftSize]), fmt.Errorf("inode %d chunk %d out of range", p.inode, pageNum)
+			return fuse.ReadResultData(dest[:totalSize-leftSize]), fmt.Errorf("cannot find inode %d chunk %d", p.inode, pageNum)
 		}
 		if !page.clean {
 			err := p.SyncPage(ctx, pageNum, page)
@@ -143,14 +159,31 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 			}
 		}
 
+		if pageOffset > page.size {
+			return fuse.ReadResultData(dest[:totalSize-leftSize]),
+				fmt.Errorf("read inode %d chunk %d out of range: pageOffset:%d > page.size:%d", p.inode, pageNum, pageOffset, page.size)
+		}
+
 		dataSize := page.size - pageOffset
 		if dataSize > leftSize {
 			dataSize = leftSize
 		}
+
+		log.WithFields(
+			log.Fields{
+				"totalSize":  totalSize,
+				"leftSize":   leftSize,
+				"dataOffset": dataOffset,
+				"dataSize":   dataSize,
+				"pageOffset": pageOffset,
+				"page.size":  page.size,
+				"curOffset":  curOffset,
+			}).Debug("Pool Read")
+
 		copy(dest[dataOffset:dataOffset+dataSize], page.data[pageOffset:pageOffset+dataSize])
 
 		leftSize -= dataSize
-		dataOffset += dataOffset
+		dataOffset += dataSize
 		curOffset = (pageNum + 1) * pageSize
 	}
 
@@ -233,7 +266,7 @@ func (p *Pool) loadPage(ctx context.Context, pageNum int64) (*Page, bool, error)
 	if err != nil {
 		return nil, false, err
 	} else {
-		page, err = NewPageWithReader(pageNum, reader)
+		page, err = NewPageWithReader(pageNum, reader, pageSize)
 		if err != nil {
 			return nil, false, err
 		}

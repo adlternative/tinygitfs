@@ -462,6 +462,14 @@ func (r *RedisMeta) nextInode(ctx context.Context) (Ino, error) {
 }
 
 func (r *RedisMeta) SetChunkMeta(ctx context.Context, inode Ino, pageNum int64, offset int64, lens int, storagePath string) error {
+	log.WithFields(log.Fields{
+		"inode":       inode,
+		"pageNum":     pageNum,
+		"offset":      offset,
+		"length":      lens,
+		"storagePath": storagePath,
+	}).Debug("Redis SetChunkMeta")
+
 	jsonChunkAttr, err := json.Marshal(&ChunkAttr{
 		Offset:      offset,
 		Lens:        lens,
