@@ -35,7 +35,7 @@ func NewFileHandler(ctx context.Context, inode metadata.Ino, dataSource datasour
 			case <-ctx.Done():
 				break loop
 			case <-timer.C:
-				pagePool.Purge()
+				pagePool.Fsync(ctx)
 			}
 		}
 	}()
@@ -50,6 +50,30 @@ func NewFileHandler(ctx context.Context, inode metadata.Ino, dataSource datasour
 var _ = (fs.FileHandle)((*FileHandler)(nil))
 var _ = (fs.FileWriter)((*FileHandler)(nil))
 var _ = (fs.FileReader)((*FileHandler)(nil))
+var _ = (fs.FileFlusher)((*FileHandler)(nil))
+var _ = (fs.FileFsyncer)((*FileHandler)(nil))
+
+func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+	log.WithFields(
+		log.Fields{
+			"flags": flags,
+			"inode": fh.inode,
+		}).Debug("Fsync")
+	err := fh.pagePool.Fsync(context.Background())
+	if err != nil {
+		log.WithError(err).Error("fsync failed")
+		return syscall.EIO
+	}
+	return syscall.F_OK
+}
+
+func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
+	log.WithFields(
+		log.Fields{
+			"inode": fh.inode,
+		}).Debug("Flush")
+	return syscall.F_OK
+}
 
 func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (written uint32, errno syscall.Errno) {
 	log.WithFields(
@@ -85,5 +109,10 @@ func (fh *FileHandler) Read(ctx context.Context, dest []byte, off int64) (fuse.R
 		log.WithError(err).Errorf("pagePool Read failed")
 		return result, syscall.EIO
 	}
+	eno := fh.Meta.ReadUpdate(ctx, fh.inode)
+	if eno != syscall.F_OK {
+		return result, eno
+	}
+
 	return result, syscall.F_OK
 }

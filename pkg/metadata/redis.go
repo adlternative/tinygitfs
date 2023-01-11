@@ -499,6 +499,17 @@ func (r *RedisMeta) GetChunkMeta(ctx context.Context, inode Ino, pageNum int64) 
 	return chunkAttr, true, nil
 }
 
+func (r *RedisMeta) ReadUpdate(ctx context.Context, inode Ino) syscall.Errno {
+	attr, eno := r.Getattr(ctx, inode)
+	if eno != syscall.F_OK {
+		return eno
+	}
+
+	SetTime(&attr.Atime, &attr.Atimensec, time.Now())
+	r.setattr(ctx, inode, attr)
+	return syscall.F_OK
+}
+
 func (r *RedisMeta) WriteUpdate(ctx context.Context, inode Ino, length uint64) syscall.Errno {
 	attr, eno := r.Getattr(ctx, inode)
 	if eno != syscall.F_OK {
@@ -508,6 +519,7 @@ func (r *RedisMeta) WriteUpdate(ctx context.Context, inode Ino, length uint64) s
 	if attr.Length < length {
 		attr.Length = length
 	}
+	SetTime(&attr.Mtime, &attr.Mtimensec, time.Now())
 	SetTime(&attr.Atime, &attr.Atimensec, time.Now())
 	r.setattr(ctx, inode, attr)
 	return syscall.F_OK

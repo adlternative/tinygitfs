@@ -11,6 +11,7 @@ import (
 	lru "github.com/hashicorp/golang-lru/v2"
 	log "github.com/sirupsen/logrus"
 	"io"
+	"sync"
 )
 
 const pageSize = 1 << 20
@@ -21,6 +22,7 @@ type Page struct {
 	data       []byte
 	clean      bool
 	size       int64
+	mu         *sync.Mutex
 }
 
 func (p *Page) SetSize(size int64) {
@@ -33,6 +35,7 @@ func NewPage(pageNumber int64) *Page {
 		data:       make([]byte, pageSize),
 		clean:      true,
 		size:       0,
+		mu:         &sync.Mutex{},
 	}
 }
 
@@ -69,44 +72,51 @@ type Pool struct {
 	inode metadata.Ino
 	cache *lru.Cache[int64, *Page]
 	datasource.DataSource
+	mu *sync.RWMutex
 }
 
 func NewPagePool(ctx context.Context, dataSource datasource.DataSource, inode metadata.Ino) (*Pool, error) {
+	pool := &Pool{
+		inode:      inode,
+		DataSource: dataSource,
+		mu:         &sync.RWMutex{},
+	}
+
 	cache, err := lru.NewWithEvict[int64, *Page](poolSize/pageSize,
 		func(pageNum int64, page *Page) {
-			if !page.clean {
-				// TODO txn
-				path := storagePath(inode, pageNum)
-
-				err := dataSource.Data.Put(path, bytes.NewReader(page.data[:page.size]))
-				if err != nil {
-					log.WithError(err).Errorf("set chunk data failed")
-					return
-				}
-				err = dataSource.Meta.SetChunkMeta(ctx, inode, page.pageNumber, page.pageNumber*pageSize, int(page.size), path)
-				if err != nil {
-					log.WithError(err).Errorf("set chunk metadata failed")
-					return
-				}
-				page.clean = true
+			err := pool.FSyncPage(ctx, page)
+			if err != nil {
+				log.WithError(err).Error("page pool fsync failed")
 			}
 		})
 	if err != nil {
 		return nil, err
 	}
-	return &Pool{
-		inode:      inode,
-		DataSource: dataSource,
-		cache:      cache,
-	}, nil
+
+	pool.cache = cache
+	return pool, nil
 }
 
-func (p *Pool) Purge() {
-	log.WithField("page pool size", p.cache.Len()).Infof("page pool purge")
-	p.cache.Purge()
+func (p *Pool) Fsync(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, k := range p.cache.Keys() {
+		page, ok := p.cache.Peek(k)
+		if !ok {
+			return fmt.Errorf("pagepool cache key %d peek failed", k)
+		}
+		err := p.FSyncPage(ctx, page)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	totalSize := int64(len(data))
 	leftSize := totalSize
 	curOffset := off
@@ -124,11 +134,15 @@ func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error
 		if err != nil {
 			return uint32(totalSize - leftSize), err
 		}
+		page.mu.Lock()
 		copy(page.data[pageOffset:pageOffset+dataLen], data[dataOffset:dataOffset+dataLen])
 		page.clean = false
+		//p.dirtyPages.PushBack(page)
 		if page.size < pageOffset+dataLen {
 			page.SetSize(pageOffset + dataLen)
 		}
+		page.mu.Unlock()
+
 		leftSize -= dataLen
 		dataOffset += dataLen
 		curOffset = (pageNum + 1) * pageSize
@@ -137,6 +151,9 @@ func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error
 }
 
 func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, error) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
 	totalSize := int64(len(dest))
 	leftSize := totalSize
 	curOffset := off
@@ -152,8 +169,9 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 		if !find {
 			return fuse.ReadResultData(dest[:totalSize-leftSize]), fmt.Errorf("cannot find inode %d chunk %d", p.inode, pageNum)
 		}
+		page.mu.Lock()
 		if !page.clean {
-			err := p.SyncPage(ctx, pageNum, page)
+			err := p.fSyncPage(ctx, page)
 			if err != nil {
 				return fuse.ReadResultData(dest[:totalSize-leftSize]), err
 			}
@@ -169,18 +187,19 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 			dataSize = leftSize
 		}
 
-		log.WithFields(
-			log.Fields{
-				"totalSize":  totalSize,
-				"leftSize":   leftSize,
-				"dataOffset": dataOffset,
-				"dataSize":   dataSize,
-				"pageOffset": pageOffset,
-				"page.size":  page.size,
-				"curOffset":  curOffset,
-			}).Debug("Pool Read")
+		//log.WithFields(
+		//	log.Fields{
+		//		"totalSize":  totalSize,
+		//		"leftSize":   leftSize,
+		//		"dataOffset": dataOffset,
+		//		"dataSize":   dataSize,
+		//		"pageOffset": pageOffset,
+		//		"page.size":  page.size,
+		//		"curOffset":  curOffset,
+		//	}).Debug("Pool Read")
 
 		copy(dest[dataOffset:dataOffset+dataSize], page.data[pageOffset:pageOffset+dataSize])
+		page.mu.Unlock()
 
 		leftSize -= dataSize
 		dataOffset += dataSize
@@ -194,12 +213,19 @@ func storagePath(inode metadata.Ino, pageNum int64) string {
 	return fmt.Sprintf("chunks/%d/%d/%s", inode, pageNum, utils.RandStringBytes(32))
 }
 
-func (p *Pool) SyncPage(ctx context.Context, pageNum int64, page *Page) error {
+func (p *Pool) FSyncPage(ctx context.Context, page *Page) error {
+	page.mu.Lock()
+	defer page.mu.Unlock()
+
+	return p.fSyncPage(ctx, page)
+}
+
+func (p *Pool) fSyncPage(ctx context.Context, page *Page) error {
 	if page.clean {
 		return nil
 	}
 	// TODO txn
-	path := storagePath(p.inode, pageNum)
+	path := storagePath(p.inode, page.pageNumber)
 	err := p.Data.Put(path, bytes.NewReader(page.data[:page.size]))
 	if err != nil {
 		log.WithError(err).Errorf("set chunk data failed")
