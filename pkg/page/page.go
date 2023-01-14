@@ -12,6 +12,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"io"
 	"sync"
+	"syscall"
 )
 
 const pageSize = 1 << 20
@@ -236,6 +237,13 @@ func (p *Pool) fSyncPage(ctx context.Context, page *Page) error {
 		log.WithError(err).Errorf("set chunk metadata failed")
 		return err
 	}
+
+	eno := p.Meta.WriteUpdate(ctx, p.inode, uint64(page.pageNumber*pageSize+page.size))
+	if eno != syscall.F_OK {
+		log.WithError(err).Errorf("write update failed")
+		return fmt.Errorf("write update failed")
+	}
+
 	page.clean = true
 	return nil
 }

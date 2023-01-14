@@ -72,6 +72,11 @@ func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
 		log.Fields{
 			"inode": fh.inode,
 		}).Debug("Flush")
+	err := fh.pagePool.Fsync(context.Background())
+	if err != nil {
+		log.WithError(err).Error("fsync failed")
+		return syscall.EIO
+	}
 	return syscall.F_OK
 }
 
@@ -89,10 +94,6 @@ func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (writt
 		return written, syscall.EIO
 	}
 
-	eno := fh.Meta.WriteUpdate(ctx, fh.inode, (uint64)(off)+(uint64)(written))
-	if eno != syscall.F_OK {
-		return 0, eno
-	}
 	return written, syscall.F_OK
 }
 
