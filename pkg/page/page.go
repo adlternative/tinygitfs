@@ -160,7 +160,7 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 	curOffset := off
 	dataOffset := int64(0)
 
-	for leftSize > 0 {
+	for curPageSize := int64(pageSize); leftSize > 0 && curPageSize == pageSize; {
 		pageNum := curOffset / pageSize
 		pageOffset := curOffset % pageSize
 		page, find, err := p.CheckPage(ctx, pageNum)
@@ -168,23 +168,24 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 			return fuse.ReadResultData(dest[:totalSize-leftSize]), err
 		}
 		if !find {
-			return fuse.ReadResultData(dest[:totalSize-leftSize]), fmt.Errorf("cannot find inode %d chunk %d", p.inode, pageNum)
+			log.Debugf("cannot find inode %d chunk %d", p.inode, pageNum)
+			break
 		}
 		page.mu.Lock()
+		curPageSize = page.size
+
 		if !page.clean {
 			err := p.fSyncPage(ctx, page)
 			if err != nil {
+				page.mu.Unlock()
 				return fuse.ReadResultData(dest[:totalSize-leftSize]), err
 			}
 		}
-
-		if pageOffset > page.size {
-			return fuse.ReadResultData(dest[:totalSize-leftSize]),
-				fmt.Errorf("read inode %d chunk %d out of range: pageOffset:%d > page.size:%d", p.inode, pageNum, pageOffset, page.size)
-		}
-
-		dataSize := page.size - pageOffset
-		if dataSize > leftSize {
+		dataSize := curPageSize - pageOffset
+		if dataSize < 0 {
+			page.mu.Unlock()
+			break
+		} else if dataSize > leftSize {
 			dataSize = leftSize
 		}
 
@@ -200,6 +201,7 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 		//	}).Debug("Pool Read")
 
 		copy(dest[dataOffset:dataOffset+dataSize], page.data[pageOffset:pageOffset+dataSize])
+
 		page.mu.Unlock()
 
 		leftSize -= dataSize
