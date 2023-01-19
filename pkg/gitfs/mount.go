@@ -288,7 +288,7 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	fields := log.Fields{}
 	fields = make(map[string]interface{})
 
-	fields["parent inode"] = node.inode
+	fields["inode"] = node.inode
 
 	if atime, ok := in.GetATime(); ok {
 		fields["atime"] = atime
@@ -299,7 +299,7 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	if uid, ok := in.GetUID(); ok {
 		fields["uid"] = uid
 	}
-	if gid, ok := in.GetUID(); ok {
+	if gid, ok := in.GetGID(); ok {
 		fields["gid"] = gid
 	}
 	if mode, ok := in.GetMode(); ok {
@@ -309,7 +309,7 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 		fields["size"] = size
 	}
 
-	log.WithFields(fields).Trace("Setattr")
+	log.WithFields(fields).Debug("Setattr")
 
 	attr, eno := node.Meta.Setattr(ctx, node.inode, in)
 	if eno != syscall.F_OK {
