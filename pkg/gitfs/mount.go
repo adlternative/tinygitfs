@@ -256,9 +256,6 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 }
 
 func (node *Node) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
-	if (flags & syscall.O_RDONLY) != 0 {
-		return nil, 0, syscall.EROFS
-	}
 	fileHandler, err := NewFileHandler(ctx, node.inode, node.DataSource)
 	if err != nil {
 		return nil, 0, syscall.ENOATTR
