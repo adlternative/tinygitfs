@@ -40,19 +40,21 @@ var mountCmd = &cobra.Command{
 		}
 
 		go func() {
-			// wait for done
-			select {
-			case <-ctx.Done():
-			case s := <-termCh:
-				log.Infof("received signal %q\n", s)
-				cancel()
-				if err := server.Unmount(); err != nil {
-					if err != nil {
-						log.WithError(err).Errorf("gitfs unmount failed")
-						return
+		loop:
+			for {
+				// wait for done
+				select {
+				case <-ctx.Done():
+				case s := <-termCh:
+					log.Infof("received signal %q\n", s)
+					err := server.Unmount()
+					if err == nil {
+						break loop
 					}
+					log.WithError(err).Errorf("gitfs unmount failed")
 				}
 			}
+			cancel()
 		}()
 
 		server.Wait()
