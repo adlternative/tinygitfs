@@ -2,6 +2,8 @@ package gitfs
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"syscall"
 	"time"
 
@@ -13,13 +15,20 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type FileHandler struct {
-	pagePool *page.Pool
+type File struct {
 	inode    metadata.Ino
+	pagePool *page.Pool
+	ref      int
 	datasource.DataSource
+	mu          *sync.Mutex
+	releaseOnce *sync.Once
 }
 
-func NewFileHandler(ctx context.Context, inode metadata.Ino, dataSource datasource.DataSource) (*FileHandler, error) {
+type FileHandler struct {
+	file *File
+}
+
+func NewFile(ctx context.Context, inode metadata.Ino, dataSource datasource.DataSource) (*File, error) {
 	pagePool, err := page.NewPagePool(ctx, dataSource, inode)
 	if err != nil {
 		return nil, err
@@ -35,16 +44,52 @@ func NewFileHandler(ctx context.Context, inode metadata.Ino, dataSource datasour
 			case <-ctx.Done():
 				break loop
 			case <-timer.C:
-				pagePool.Fsync(ctx)
+				if err := pagePool.Fsync(ctx); err != nil {
+					log.WithError(err).Error("page pool fsync failed")
+				}
 			}
 		}
 	}()
 
-	return &FileHandler{
-		pagePool:   pagePool,
-		inode:      inode,
-		DataSource: dataSource,
+	return &File{
+		pagePool:    pagePool,
+		inode:       inode,
+		DataSource:  dataSource,
+		mu:          &sync.Mutex{},
+		releaseOnce: &sync.Once{},
 	}, nil
+}
+
+func (file *File) NewFileHandler() *FileHandler {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+
+	file.ref++
+
+	return &FileHandler{
+		file: file,
+	}
+}
+
+func (file *File) UnRef(release func()) error {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+
+	file.ref--
+	if file.ref < 0 {
+		log.Errorf("file ref down to negative value: %d", file.ref)
+		return fmt.Errorf("file ref down to negative value: %d", file.ref)
+	} else if file.ref == 0 {
+		file.releaseOnce.Do(release)
+	}
+	return nil
+}
+
+func (file *File) Ref() int {
+	file.mu.Lock()
+	defer file.mu.Unlock()
+
+	return file.ref
 }
 
 var _ = (fs.FileHandle)((*FileHandler)(nil))
@@ -52,14 +97,24 @@ var _ = (fs.FileWriter)((*FileHandler)(nil))
 var _ = (fs.FileReader)((*FileHandler)(nil))
 var _ = (fs.FileFlusher)((*FileHandler)(nil))
 var _ = (fs.FileFsyncer)((*FileHandler)(nil))
+var _ = (fs.FileReleaser)((*FileHandler)(nil))
+
+func (fh *FileHandler) Release(ctx context.Context) syscall.Errno {
+	log.WithFields(
+		log.Fields{
+			"inode": fh.file.inode,
+		}).Debug("Release")
+
+	return syscall.F_OK
+}
 
 func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 	log.WithFields(
 		log.Fields{
 			"flags": flags,
-			"inode": fh.inode,
+			"inode": fh.file.inode,
 		}).Debug("Fsync")
-	err := fh.pagePool.Fsync(context.Background())
+	err := fh.file.pagePool.Fsync(context.Background())
 	if err != nil {
 		log.WithError(err).Error("fsync failed")
 		return syscall.EIO
@@ -70,11 +125,18 @@ func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
-			"inode": fh.inode,
-		}).Debug("Flush")
-	err := fh.pagePool.Fsync(context.Background())
+			"inode": fh.file.inode,
+		}).Debug("Flush(Close)")
+
+	err := fh.file.pagePool.Fsync(ctx)
 	if err != nil {
-		log.WithError(err).Error("fsync failed")
+		log.WithError(err).Error("flush fsync failed")
+		return syscall.EIO
+	}
+
+	err = GlobalGitFs.CloseFile(ctx, fh.file.inode)
+	if err != nil {
+		log.WithError(err).Error("flush unref failed")
 		return syscall.EIO
 	}
 	return syscall.F_OK
@@ -85,10 +147,10 @@ func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (writt
 		log.Fields{
 			"length": len(data),
 			"offset": off,
-			"inode":  fh.inode,
+			"inode":  fh.file.inode,
 		}).Debug("Write")
 
-	written, err := fh.pagePool.Write(ctx, data, off)
+	written, err := fh.file.pagePool.Write(ctx, data, off)
 	if err != nil {
 		log.WithError(err).Errorf("pagePool write failed")
 		return written, syscall.EIO
@@ -102,15 +164,15 @@ func (fh *FileHandler) Read(ctx context.Context, dest []byte, off int64) (fuse.R
 		log.Fields{
 			"dest length": len(dest),
 			"offset":      off,
-			"inode":       fh.inode,
+			"inode":       fh.file.inode,
 		}).Debug("Read")
 
-	result, err := fh.pagePool.Read(ctx, dest, off)
+	result, err := fh.file.pagePool.Read(ctx, dest, off)
 	if err != nil {
 		log.WithError(err).Errorf("pagePool Read failed")
 		return result, syscall.EIO
 	}
-	eno := fh.Meta.ReadUpdate(ctx, fh.inode)
+	eno := fh.file.Meta.ReadUpdate(ctx, fh.file.inode)
 	if eno != syscall.F_OK {
 		return result, eno
 	}

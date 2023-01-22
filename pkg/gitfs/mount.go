@@ -2,10 +2,12 @@ package gitfs
 
 import (
 	"context"
+	"fmt"
 	"github.com/adlternative/tinygitfs/pkg/data"
 	"github.com/adlternative/tinygitfs/pkg/datasource"
 	"os"
 	"runtime"
+	"sync"
 	"syscall"
 
 	"github.com/adlternative/tinygitfs/pkg/metadata"
@@ -35,8 +37,61 @@ type Node struct {
 	newNodeFn NewNodeFn
 }
 
+var GlobalGitFs *GitFs
+
 type GitFs struct {
 	Node
+	files   map[metadata.Ino]*File
+	filesMu *sync.Mutex
+}
+
+func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHandler, error) {
+	var err error
+
+	gitFs.filesMu.Lock()
+	defer GlobalGitFs.filesMu.Unlock()
+
+	file, ok := GlobalGitFs.files[inode]
+	if !ok {
+		file, err = NewFile(ctx, inode, gitFs.DataSource)
+		if err != nil {
+			return nil, err
+		}
+		GlobalGitFs.files[inode] = file
+	}
+	return file.NewFileHandler(), nil
+}
+
+func (gitFs *GitFs) CloseFile(ctx context.Context, inode metadata.Ino) error {
+	var err error
+
+	gitFs.filesMu.Lock()
+	defer GlobalGitFs.filesMu.Unlock()
+
+	file, ok := GlobalGitFs.files[inode]
+	if !ok {
+		return fmt.Errorf("cannot find the file want to close: %d", inode)
+	}
+
+	log.WithFields(
+		log.Fields{
+			"inode": inode,
+			"ref":   file.Ref(),
+		}).Debug("Close File")
+
+	err = file.UnRef(func() {
+		log.WithFields(
+			log.Fields{
+				"inode": inode,
+			}).Debug("Release File")
+
+		delete(GlobalGitFs.files, inode)
+	})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) (*GitFs, error) {
@@ -59,6 +114,8 @@ func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) 
 	}
 
 	return &GitFs{
+		files:   make(map[metadata.Ino]*File),
+		filesMu: &sync.Mutex{},
 		Node: Node{
 			inode: 1,
 			name:  "",
@@ -244,7 +301,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 	}
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
 
-	fileHandler, err := NewFileHandler(ctx, ino, node.DataSource)
+	fileHandler, err := GlobalGitFs.OpenFile(ctx, ino)
 	if err != nil {
 		return nil, 0, 0, syscall.ENOATTR
 	}
@@ -256,11 +313,18 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 }
 
 func (node *Node) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
-	fileHandler, err := NewFileHandler(ctx, node.inode, node.DataSource)
+	log.WithFields(
+		log.Fields{
+			"flags": flags,
+			"inode": node.inode,
+		}).Trace("Open")
+
+	fh, err := GlobalGitFs.OpenFile(ctx, node.inode)
 	if err != nil {
-		return nil, 0, syscall.ENOATTR
+		return nil, 0, syscall.EIO
 	}
-	return fileHandler, 0, syscall.F_OK
+
+	return fh, 0, syscall.F_OK
 }
 
 func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
@@ -317,7 +381,9 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 }
 
 func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, dataOption *data.Option) (*fuse.Server, error) {
-	gitfs, err := NewGitFs(ctx, metaDataUrl, dataOption)
+	var err error
+
+	GlobalGitFs, err = NewGitFs(ctx, metaDataUrl, dataOption)
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +413,7 @@ func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, d
 		opts.Options = append(opts.Options, "daemon_timeout=60", "iosize=65536", "novncache")
 	}
 
-	server, err := fs.Mount(mntDir, gitfs, &fs.Options{
+	server, err := fs.Mount(mntDir, GlobalGitFs, &fs.Options{
 		MountOptions: opts,
 	})
 	if err != nil {
