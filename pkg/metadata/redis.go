@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"os"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -461,6 +460,10 @@ func (r *RedisMeta) nextInode(ctx context.Context) (Ino, error) {
 	return Ino(ino), err
 }
 
+// SetChunkMeta
+// inode[pagenum] -> { offset. length, storagePath }
+// because redis hash cannot support trim easily,
+// so it will better to use redis list to do this.
 func (r *RedisMeta) SetChunkMeta(ctx context.Context, inode Ino, pageNum int64, offset int64, lens int, storagePath string) error {
 	log.WithFields(log.Fields{
 		"inode":       inode,
@@ -472,19 +475,32 @@ func (r *RedisMeta) SetChunkMeta(ctx context.Context, inode Ino, pageNum int64, 
 
 	jsonChunkAttr, err := json.Marshal(&ChunkAttr{
 		Offset:      offset,
-		Lens:        lens,
+		Length:      lens,
 		StoragePath: storagePath,
 	})
 	if err != nil {
 		return err
 	}
-	return r.rdb.HSet(ctx, chunkKey(inode), pageNum, jsonChunkAttr).Err()
+
+	totalPageNum, err := r.rdb.LLen(ctx, chunkKey(inode)).Result()
+	if pageNum == totalPageNum {
+		return r.rdb.RPush(ctx, chunkKey(inode), jsonChunkAttr).Err()
+	} else if pageNum < totalPageNum {
+		return r.rdb.LSet(ctx, chunkKey(inode), pageNum, jsonChunkAttr).Err()
+	} else {
+		log.WithFields(
+			log.Fields{
+				"pageNum":      pageNum,
+				"totalPageNum": totalPageNum,
+			}).Errorf("set chunk meta out of file total pageNum")
+		return fmt.Errorf("set chunk meta out of file total pageNum")
+	}
 }
 
 func (r *RedisMeta) GetChunkMeta(ctx context.Context, inode Ino, pageNum int64) (*ChunkAttr, bool, error) {
 	chunkAttr := &ChunkAttr{}
 
-	jsonChunkAttr, err := r.rdb.HGet(ctx, chunkKey(inode), strconv.FormatInt(pageNum, 10)).Bytes()
+	jsonChunkAttr, err := r.rdb.LIndex(ctx, chunkKey(inode), pageNum).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, false, nil

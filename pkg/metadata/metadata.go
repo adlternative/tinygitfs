@@ -130,7 +130,7 @@ func dentryKey(inode Ino) string {
 
 type ChunkAttr struct {
 	Offset      int64  `json:"offset"`
-	Lens        int    `json:"len"`
+	Length      int    `json:"length"`
 	StoragePath string `json:"storagePath"`
 }
 
