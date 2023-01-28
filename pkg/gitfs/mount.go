@@ -333,7 +333,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 
 	fileHandler, err := GlobalGitFs.OpenFile(ctx, ino)
 	if err != nil {
-		return nil, 0, 0, syscall.ENOATTR
+		return nil, 0, 0, syscall.ENOENT
 	}
 	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
 		Mode: mode,
