@@ -252,7 +252,7 @@ func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 	//log.Printf("%s %d %o\n", name, entry.Ino, out.Attr.Mode)
 
 	return node.NewInode(ctx, node.newNodeFn(node.DataSource, entry.Ino, name), fs.StableAttr{
-		Mode: uint32(attr.Mode),
+		Mode: uint32(out.Mode),
 		Ino:  uint64(entry.Ino),
 		Gen:  1,
 	}), 0
@@ -272,7 +272,7 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 	}
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
 	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
-		Mode: mode,
+		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
 	}), 0
@@ -297,7 +297,7 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 	}
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
 	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
-		Mode: mode,
+		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
 	}), 0
@@ -322,7 +322,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 		return nil, 0, 0, syscall.ENOENT
 	}
 	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
-		Mode: mode,
+		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
 	}), fileHandler, 0, syscall.F_OK
