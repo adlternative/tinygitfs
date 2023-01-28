@@ -54,7 +54,7 @@ func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHand
 
 	file, ok := GlobalGitFs.files[inode]
 	if !ok {
-		file, err = NewFile(ctx, inode, gitFs.DataSource)
+		file, err = NewFile(ctx, inode, gitFs.DataSource, gitFs)
 		if err != nil {
 			return nil, err
 		}
@@ -63,36 +63,22 @@ func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHand
 	return file.NewFileHandler(), nil
 }
 
-func (gitFs *GitFs) CloseFile(ctx context.Context, inode metadata.Ino) error {
-	var err error
-
+func (gitFs *GitFs) ReleaseFile(ctx context.Context, inode metadata.Ino) error {
 	gitFs.filesMu.Lock()
-	defer GlobalGitFs.filesMu.Unlock()
+	defer gitFs.filesMu.Unlock()
 
-	file, ok := GlobalGitFs.files[inode]
+	file, ok := gitFs.files[inode]
 	if !ok {
-		return fmt.Errorf("cannot find the file want to close: %d", inode)
+		return fmt.Errorf("cannot find the file want to release: %d", inode)
 	}
-
-	log.WithFields(
-		log.Fields{
-			"inode": inode,
-			"ref":   file.Ref(),
-		}).Debug("Close File")
-
-	err = file.UnRef(func() {
+	return file.UnRef(func() {
 		log.WithFields(
 			log.Fields{
 				"inode": inode,
 			}).Debug("Release File")
 
-		delete(GlobalGitFs.files, inode)
+		delete(gitFs.files, inode)
 	})
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (gitFs *GitFs) Truncate(ctx context.Context, inode metadata.Ino, size uint64) error {

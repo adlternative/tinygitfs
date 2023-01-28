@@ -22,13 +22,14 @@ type File struct {
 	datasource.DataSource
 	mu          *sync.Mutex
 	releaseOnce *sync.Once
+	gitfs       *GitFs
 }
 
 type FileHandler struct {
 	file *File
 }
 
-func NewFile(ctx context.Context, inode metadata.Ino, dataSource datasource.DataSource) (*File, error) {
+func NewFile(ctx context.Context, inode metadata.Ino, dataSource datasource.DataSource, gitFs *GitFs) (*File, error) {
 	pagePool, err := page.NewPagePool(ctx, dataSource, inode)
 	if err != nil {
 		return nil, err
@@ -57,6 +58,7 @@ func NewFile(ctx context.Context, inode metadata.Ino, dataSource datasource.Data
 		DataSource:  dataSource,
 		mu:          &sync.Mutex{},
 		releaseOnce: &sync.Once{},
+		gitfs:       gitFs,
 	}, nil
 }
 
@@ -97,6 +99,10 @@ func (file *File) Truncate(ctx context.Context, size uint64) error {
 	return nil
 }
 
+func (file *File) Release(ctx context.Context) error {
+	return file.gitfs.ReleaseFile(ctx, file.inode)
+}
+
 var _ = (fs.FileHandle)((*FileHandler)(nil))
 var _ = (fs.FileWriter)((*FileHandler)(nil))
 var _ = (fs.FileReader)((*FileHandler)(nil))
@@ -109,6 +115,11 @@ func (fh *FileHandler) Release(ctx context.Context) syscall.Errno {
 		log.Fields{
 			"inode": fh.file.inode,
 		}).Debug("Release")
+
+	err := fh.file.Release(ctx)
+	if err != nil {
+		return syscall.ENOENT
+	}
 
 	return syscall.F_OK
 }
@@ -139,11 +150,6 @@ func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
 		return syscall.EIO
 	}
 
-	err = GlobalGitFs.CloseFile(ctx, fh.file.inode)
-	if err != nil {
-		log.WithError(err).Error("flush unref failed")
-		return syscall.EIO
-	}
 	return syscall.F_OK
 }
 
