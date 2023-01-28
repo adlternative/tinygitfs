@@ -207,7 +207,7 @@ func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmb
 			"newName":   newName,
 			"flags":     flags,
 			"inode":     node.inode,
-		}).Trace("Rename")
+		}).Debug("Rename")
 
 	return node.Meta.Rename(ctx, node.inode, name, metadata.Ino(newParentInode), newName)
 }
@@ -279,7 +279,7 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 			"name":         name,
 			"mode":         mode,
 			"parent inode": node.inode,
-		}).Trace("Mkdir")
+		}).Debug("Mkdir")
 	attr, ino, eno := node.Meta.MkNod(ctx, node.inode, metadata.TypeDirectory, name, mode, 0)
 	if eno != 0 {
 		return nil, eno
@@ -299,7 +299,7 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 			"mode":         mode,
 			"dev":          dev,
 			"parent inode": node.inode,
-		}).Trace("Mknod")
+		}).Debug("Mknod")
 	_type := metadata.GetFiletype(uint16(mode))
 	if _type == 0 {
 		return nil, syscall.EPERM
@@ -324,7 +324,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 			"flags":        flags,
 			"mode":         mode,
 			"parent inode": node.inode,
-		}).Trace("Create")
+		}).Debug("Create")
 	attr, ino, eno := node.Meta.MkNod(ctx, node.inode, metadata.TypeFile, name, mode, 0)
 	if eno != 0 {
 		return nil, 0, 0, eno
@@ -347,7 +347,7 @@ func (node *Node) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fus
 		log.Fields{
 			"flags": flags,
 			"inode": node.inode,
-		}).Trace("Open")
+		}).Debug("Open")
 
 	fh, err := GlobalGitFs.OpenFile(ctx, node.inode)
 	if err != nil {
@@ -362,7 +362,7 @@ func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 		log.Fields{
 			"name":         name,
 			"parent inode": node.inode,
-		}).Trace("Rmdir")
+		}).Debug("Rmdir")
 	return node.Meta.Rmdir(ctx, node.inode, name)
 }
 
@@ -371,7 +371,7 @@ func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 		log.Fields{
 			"name":         name,
 			"parent inode": node.inode,
-		}).Trace("Unlink")
+		}).Debug("Unlink")
 	return node.Meta.Unlink(ctx, node.inode, name)
 }
 
