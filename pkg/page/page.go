@@ -15,8 +15,8 @@ import (
 	"syscall"
 )
 
-const pageSize = 1 << 20
-const poolSize = 64 << 20
+const PageSize = 1 << 20
+const PoolSize = 64 << 20
 
 type Page struct {
 	pageNumber int64
@@ -33,7 +33,7 @@ func (p *Page) SetSize(size int64) {
 func NewPage(pageNumber int64) *Page {
 	return &Page{
 		pageNumber: pageNumber,
-		data:       make([]byte, pageSize),
+		data:       make([]byte, PageSize),
 		clean:      true,
 		size:       0,
 		mu:         &sync.Mutex{},
@@ -83,7 +83,7 @@ func NewPagePool(ctx context.Context, dataSource datasource.DataSource, inode me
 		mu:         &sync.RWMutex{},
 	}
 
-	cache, err := lru.NewWithEvict[int64, *Page](poolSize/pageSize,
+	cache, err := lru.NewWithEvict[int64, *Page](PoolSize/PageSize,
 		func(pageNum int64, page *Page) {
 			err := pool.FSyncPage(ctx, page)
 			if err != nil {
@@ -98,10 +98,45 @@ func NewPagePool(ctx context.Context, dataSource datasource.DataSource, inode me
 	return pool, nil
 }
 
+func (p *Pool) Truncate(ctx context.Context, size uint64) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	lastPageNum := int64(size / PageSize)
+	lastPageLength := int(size % PageSize)
+
+	// truncate page pool
+	for _, pageNum := range p.cache.Keys() {
+		if pageNum > lastPageNum || (lastPageLength == 0 && pageNum == lastPageNum) {
+			p.cache.Remove(pageNum)
+		} else if pageNum == lastPageNum {
+			page, ok := p.cache.Peek(pageNum)
+			if !ok {
+				return fmt.Errorf("pagepool cache key %d peek failed", pageNum)
+			}
+			page.size = int64(lastPageLength)
+		}
+	}
+
+	return nil
+}
+
+func defaultCheck(key int64) bool {
+	return true
+}
+
 func (p *Pool) Fsync(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.fsync(ctx, defaultCheck)
+}
+
+func (p *Pool) fsync(ctx context.Context, checkFn func(int64) bool) error {
 	for _, k := range p.cache.Keys() {
+		if !checkFn(k) {
+			continue
+		}
+
 		page, ok := p.cache.Peek(k)
 		if !ok {
 			return fmt.Errorf("pagepool cache key %d peek failed", k)
@@ -124,9 +159,9 @@ func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error
 	dataOffset := int64(0)
 
 	for leftSize > 0 {
-		pageNum := curOffset / pageSize
-		pageOffset := curOffset % pageSize
-		dataLen := pageSize - pageOffset
+		pageNum := curOffset / PageSize
+		pageOffset := curOffset % PageSize
+		dataLen := PageSize - pageOffset
 		if dataLen > leftSize {
 			dataLen = leftSize
 		}
@@ -146,7 +181,7 @@ func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error
 
 		leftSize -= dataLen
 		dataOffset += dataLen
-		curOffset = (pageNum + 1) * pageSize
+		curOffset = (pageNum + 1) * PageSize
 	}
 	return uint32(totalSize - leftSize), nil
 }
@@ -160,9 +195,9 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 	curOffset := off
 	dataOffset := int64(0)
 
-	for curPageSize := int64(pageSize); leftSize > 0 && curPageSize == pageSize; {
-		pageNum := curOffset / pageSize
-		pageOffset := curOffset % pageSize
+	for curPageSize := int64(PageSize); leftSize > 0 && curPageSize == PageSize; {
+		pageNum := curOffset / PageSize
+		pageOffset := curOffset % PageSize
 		page, find, err := p.CheckPage(ctx, pageNum)
 		if err != nil {
 			return fuse.ReadResultData(dest[:totalSize-leftSize]), err
@@ -206,7 +241,7 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 
 		leftSize -= dataSize
 		dataOffset += dataSize
-		curOffset = (pageNum + 1) * pageSize
+		curOffset = (pageNum + 1) * PageSize
 	}
 
 	return fuse.ReadResultData(dest[:totalSize-leftSize]), nil
@@ -234,13 +269,13 @@ func (p *Pool) fSyncPage(ctx context.Context, page *Page) error {
 		log.WithError(err).Errorf("set chunk data failed")
 		return err
 	}
-	err = p.Meta.SetChunkMeta(ctx, p.inode, page.pageNumber, page.pageNumber*pageSize, int(page.size), path)
+	err = p.Meta.SetChunkMeta(ctx, p.inode, page.pageNumber, page.pageNumber*PageSize, int(page.size), path)
 	if err != nil {
 		log.WithError(err).Errorf("set chunk metadata failed")
 		return err
 	}
 
-	eno := p.Meta.WriteUpdate(ctx, p.inode, uint64(page.pageNumber*pageSize+page.size))
+	eno := p.Meta.WriteUpdate(ctx, p.inode, uint64(page.pageNumber*PageSize+page.size))
 	if eno != syscall.F_OK {
 		log.WithError(err).Errorf("write update failed")
 		return fmt.Errorf("write update failed")
@@ -298,11 +333,11 @@ func (p *Pool) loadPage(ctx context.Context, pageNum int64) (*Page, bool, error)
 		return nil, false, nil
 	}
 
-	reader, err := p.Data.Get(chunkAttr.StoragePath, 0, pageSize)
+	reader, err := p.Data.Get(chunkAttr.StoragePath, 0, int64(chunkAttr.Length))
 	if err != nil {
 		return nil, false, err
 	} else {
-		page, err = NewPageWithReader(pageNum, reader, pageSize)
+		page, err = NewPageWithReader(pageNum, reader, int64(chunkAttr.Length))
 		if err != nil {
 			return nil, false, err
 		}

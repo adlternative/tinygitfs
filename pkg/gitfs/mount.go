@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/adlternative/tinygitfs/pkg/data"
 	"github.com/adlternative/tinygitfs/pkg/datasource"
+	"github.com/adlternative/tinygitfs/pkg/page"
 	"os"
 	"runtime"
 	"sync"
@@ -87,6 +88,35 @@ func (gitFs *GitFs) CloseFile(ctx context.Context, inode metadata.Ino) error {
 
 		delete(GlobalGitFs.files, inode)
 	})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (gitFs *GitFs) Truncate(ctx context.Context, inode metadata.Ino, size uint64) error {
+	log.WithFields(
+		log.Fields{
+			"inode": inode,
+			"size":  size,
+		}).Debug("GitFs Truncate")
+
+	gitFs.filesMu.Lock()
+	defer gitFs.filesMu.Unlock()
+
+	lastPageNum := int64(size / page.PageSize)
+	lastPageLength := int(size % page.PageSize)
+
+	file, ok := GlobalGitFs.files[inode]
+	if ok {
+		err := file.Truncate(ctx, size)
+		if err != nil {
+			return err
+		}
+	}
+	//truncate meta chunks attr
+	err := gitFs.Meta.TruncateChunkMeta(ctx, inode, lastPageNum, lastPageLength)
 	if err != nil {
 		return err
 	}
@@ -349,6 +379,11 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	fields := log.Fields{}
 	fields = make(map[string]interface{})
 
+	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	if eno != syscall.F_OK {
+		return eno
+	}
+
 	fields["inode"] = node.inode
 
 	if atime, ok := in.GetATime(); ok {
@@ -369,13 +404,39 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	if size, ok := in.GetSize(); ok {
 		fields["size"] = size
 	}
-
 	log.WithFields(fields).Debug("Setattr")
 
-	attr, eno := node.Meta.Setattr(ctx, node.inode, in)
-	if eno != syscall.F_OK {
-		return eno
+	if atime, ok := in.GetATime(); ok {
+		metadata.SetTime(&attr.Atime, &attr.Atimensec, atime)
 	}
+	if ctime, ok := in.GetCTime(); ok {
+		metadata.SetTime(&attr.Ctime, &attr.Ctimensec, ctime)
+	}
+	if uid, ok := in.GetUID(); ok {
+		attr.Uid = uid
+	}
+	if gid, ok := in.GetGID(); ok {
+		attr.Gid = gid
+	}
+	if mode, ok := in.GetMode(); ok {
+		attr.Mode = uint16(mode)
+	}
+	if size, ok := in.GetSize(); ok {
+		if size < attr.Length {
+			// invalid pages
+			err := GlobalGitFs.Truncate(ctx, node.inode, size)
+			if err != nil {
+				return syscall.EIO
+			}
+		}
+		attr.Length = size
+	}
+
+	err := node.Meta.SetattrDirectly(ctx, node.inode, attr)
+	if err != nil {
+		return syscall.EIO
+	}
+
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
 	return syscall.F_OK
 }

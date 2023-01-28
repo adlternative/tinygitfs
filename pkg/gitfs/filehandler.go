@@ -92,6 +92,11 @@ func (file *File) Ref() int {
 	return file.ref
 }
 
+func (file *File) Truncate(ctx context.Context, size uint64) error {
+	file.pagePool.Truncate(ctx, size)
+	return nil
+}
+
 var _ = (fs.FileHandle)((*FileHandler)(nil))
 var _ = (fs.FileWriter)((*FileHandler)(nil))
 var _ = (fs.FileReader)((*FileHandler)(nil))

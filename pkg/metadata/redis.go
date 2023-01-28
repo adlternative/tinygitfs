@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/hanwen/go-fuse/v2/fuse"
 	"os"
 	"strings"
 	"syscall"
@@ -233,7 +232,7 @@ func (r *RedisMeta) Getattr(ctx context.Context, ino Ino) (*Attr, syscall.Errno)
 	return attr, 0
 }
 
-func (r *RedisMeta) setattr(ctx context.Context, ino Ino, attr *Attr) error {
+func (r *RedisMeta) SetattrDirectly(ctx context.Context, ino Ino, attr *Attr) error {
 	jsonAttr, err := json.Marshal(&attr)
 	if err != nil {
 		return err
@@ -243,38 +242,6 @@ func (r *RedisMeta) setattr(ctx context.Context, ino Ino, attr *Attr) error {
 		return err
 	}
 	return nil
-}
-
-func (r *RedisMeta) Setattr(ctx context.Context, ino Ino, in *fuse.SetAttrIn) (*Attr, syscall.Errno) {
-	attr, eno := r.Getattr(ctx, ino)
-	if eno != syscall.F_OK {
-		return nil, eno
-	}
-
-	if atime, ok := in.GetATime(); ok {
-		SetTime(&attr.Atime, &attr.Atimensec, atime)
-	}
-	if ctime, ok := in.GetCTime(); ok {
-		SetTime(&attr.Ctime, &attr.Ctimensec, ctime)
-	}
-
-	if uid, ok := in.GetUID(); ok {
-		attr.Uid = uid
-	}
-	if gid, ok := in.GetUID(); ok {
-		attr.Gid = gid
-	}
-	if mode, ok := in.GetMode(); ok {
-		attr.Mode = uint16(mode)
-	}
-	if size, ok := in.GetSize(); ok {
-		attr.Length = size
-	}
-	if err := r.setattr(ctx, ino, attr); err != nil {
-		return nil, errno(err)
-	}
-
-	return attr, syscall.F_OK
 }
 
 // Rmdir remove a directory with name in parent inode
@@ -303,7 +270,7 @@ func (r *RedisMeta) Rmdir(ctx context.Context, parent Ino, name string) syscall.
 
 	pattr, eno := r.Getattr(ctx, parent)
 	pattr.Nlink--
-	if err := r.setattr(ctx, parent, pattr); err != nil {
+	if err := r.SetattrDirectly(ctx, parent, pattr); err != nil {
 		return errno(err)
 	}
 
@@ -316,7 +283,7 @@ func (r *RedisMeta) Ref(ctx context.Context, inode Ino) syscall.Errno {
 		return eno
 	}
 	attr.Nlink++
-	err := r.setattr(ctx, inode, attr)
+	err := r.SetattrDirectly(ctx, inode, attr)
 	if err != nil {
 		return errno(err)
 	}
@@ -346,7 +313,7 @@ func (r *RedisMeta) link(ctx context.Context, parent Ino, target Ino, name strin
 	}
 
 	attr.Nlink++
-	r.setattr(ctx, target, attr)
+	r.SetattrDirectly(ctx, target, attr)
 
 	// d[parent][name] = target
 	err = r.SetDentry(ctx, parent, name, target, attr.Typ)
@@ -387,13 +354,13 @@ func (r *RedisMeta) unlink(ctx context.Context, parent Ino, name string, allowUn
 	r.rdb.HDel(ctx, dentryKey(parent), name)
 	if attr.Nlink == 0 {
 		r.rdb.Del(ctx, inodeKey(dentry.Ino))
-	} else if err := r.setattr(ctx, dentry.Ino, attr); err != nil {
+	} else if err := r.SetattrDirectly(ctx, dentry.Ino, attr); err != nil {
 		return errno(err)
 	}
 
 	pattr, eno := r.Getattr(ctx, parent)
 	pattr.Nlink--
-	if err := r.setattr(ctx, parent, pattr); err != nil {
+	if err := r.SetattrDirectly(ctx, parent, pattr); err != nil {
 		return errno(err)
 	}
 
@@ -515,6 +482,39 @@ func (r *RedisMeta) GetChunkMeta(ctx context.Context, inode Ino, pageNum int64) 
 	return chunkAttr, true, nil
 }
 
+func (r *RedisMeta) TruncateChunkMeta(ctx context.Context, inode Ino, pageNum int64, lastPageLength int) error {
+	log.WithFields(
+		log.Fields{
+			"inode":          inode,
+			"pageNum":        pageNum,
+			"lastPageLength": lastPageLength,
+		}).Debug("TruncateChunkMeta")
+
+	err := r.rdb.LTrim(ctx, chunkKey(inode), 0, pageNum).Err()
+	if err != nil {
+		return err
+	}
+	if lastPageLength == 0 {
+		return r.rdb.RPop(ctx, chunkKey(inode)).Err()
+	}
+
+	lastChunkAttr, ok, err := r.GetChunkMeta(ctx, inode, pageNum)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("cannot find last chunk attr, inode=%d, pageNum=%d", inode, pageNum)
+	}
+	lastChunkAttr.Length = lastPageLength
+
+	jsonChunkAttr, err := json.Marshal(lastChunkAttr)
+	if err != nil {
+		return err
+	}
+
+	return r.rdb.LSet(ctx, chunkKey(inode), pageNum, jsonChunkAttr).Err()
+}
+
 func (r *RedisMeta) ReadUpdate(ctx context.Context, inode Ino) syscall.Errno {
 	attr, eno := r.Getattr(ctx, inode)
 	if eno != syscall.F_OK {
@@ -522,7 +522,7 @@ func (r *RedisMeta) ReadUpdate(ctx context.Context, inode Ino) syscall.Errno {
 	}
 
 	SetTime(&attr.Atime, &attr.Atimensec, time.Now())
-	r.setattr(ctx, inode, attr)
+	r.SetattrDirectly(ctx, inode, attr)
 	return syscall.F_OK
 }
 
@@ -537,6 +537,6 @@ func (r *RedisMeta) WriteUpdate(ctx context.Context, inode Ino, length uint64) s
 	}
 	SetTime(&attr.Mtime, &attr.Mtimensec, time.Now())
 	SetTime(&attr.Atime, &attr.Atimensec, time.Now())
-	r.setattr(ctx, inode, attr)
+	r.SetattrDirectly(ctx, inode, attr)
 	return syscall.F_OK
 }
