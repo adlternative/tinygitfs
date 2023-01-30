@@ -280,6 +280,12 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 		return nil, eno
 	}
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
+
+	log.WithFields(
+		log.Fields{
+			"inode": ino,
+		}).Debug("Mkdir Result")
+
 	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
@@ -305,6 +311,12 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 		return nil, eno
 	}
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
+
+	log.WithFields(
+		log.Fields{
+			"inode": ino,
+		}).Debug("Mknod Result")
+
 	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
@@ -325,6 +337,11 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 		return nil, 0, 0, eno
 	}
 	metadata.ToAttrOut(node.inode, attr, &out.Attr)
+
+	log.WithFields(
+		log.Fields{
+			"inode": ino,
+		}).Debug("Create Result")
 
 	fileHandler, err := GlobalGitFs.OpenFile(ctx, ino)
 	if err != nil {
