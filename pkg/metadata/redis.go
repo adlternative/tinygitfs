@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -86,6 +87,9 @@ func errno(err error) syscall.Errno {
 	if err == redis.Nil {
 		return syscall.ENOENT
 	}
+
+	debug.PrintStack()
+	log.WithError(err).Error("meet bad error")
 	if strings.HasPrefix(err.Error(), "OOM") {
 		return syscall.ENOSPC
 	}
