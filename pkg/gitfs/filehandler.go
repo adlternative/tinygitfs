@@ -130,7 +130,7 @@ func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 			"flags": flags,
 			"inode": fh.file.inode,
 		}).Debug("Fsync")
-	err := fh.file.pagePool.Fsync(context.Background())
+	err := fh.file.pagePool.Fsync(ctx)
 	if err != nil {
 		log.WithError(err).Error("fsync failed")
 		return syscall.EIO
@@ -142,7 +142,7 @@ func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
 			"inode": fh.file.inode,
-		}).Debug("Flush(Close)")
+		}).Debug("Flush")
 
 	err := fh.file.pagePool.Fsync(ctx)
 	if err != nil {
