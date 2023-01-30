@@ -189,7 +189,7 @@ func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmb
 	log.WithFields(
 		log.Fields{
 			"name":      name,
-			"newParent": newParent.EmbeddedInode(),
+			"newParent": newParentInode,
 			"newName":   newName,
 			"flags":     flags,
 			"inode":     node.inode,
