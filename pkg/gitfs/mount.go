@@ -203,6 +203,15 @@ func (node *Node) Opendir(ctx context.Context) syscall.Errno {
 		log.Fields{
 			"inode": node.inode,
 		}).Trace("Opendir")
+
+	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	if eno != syscall.F_OK {
+		return eno
+	}
+	if attr.Typ != metadata.TypeDirectory {
+		return syscall.ENOTDIR
+	}
+
 	return syscall.F_OK
 }
 
