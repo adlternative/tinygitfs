@@ -183,6 +183,17 @@ func ToAttrOut(ino Ino, attr *Attr, out *fuse.Attr) {
 	setBlksize(out, 0x10000) //64K
 }
 
+func CopySomeAttr(src, dst *Attr) {
+	dst.Length = src.Length
+	dst.Atime = src.Length
+	dst.Atimensec = src.Atimensec
+	dst.Ctime = src.Length
+	dst.Ctimensec = src.Ctimensec
+	dst.Gid = src.Gid
+	dst.Uid = src.Uid
+	dst.Mode = src.Mode
+}
+
 func NewDirStream(ctx context.Context, ino Ino, meta *RedisMeta) (*DirStream, error) {
 	ds := &DirStream{
 		ino:    ino,

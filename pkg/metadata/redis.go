@@ -209,6 +209,7 @@ func (r *RedisMeta) MkNod(ctx context.Context, parent Ino, _type uint8, name str
 
 	jsonAttr, err := json.Marshal(attr)
 	r.rdb.Set(ctx, inodeKey(ino), jsonAttr, 0)
+	//log.WithField("inode", ino).Info("create inode")
 
 	err = r.SetDentry(ctx, parent, name, ino, _type)
 	if err != nil {
@@ -242,6 +243,7 @@ func (r *RedisMeta) SetattrDirectly(ctx context.Context, ino Ino, attr *Attr) er
 		return err
 	}
 	_, err = r.rdb.Set(ctx, inodeKey(ino), jsonAttr, 0).Result()
+
 	if err != nil {
 		return err
 	}
@@ -358,6 +360,7 @@ func (r *RedisMeta) unlink(ctx context.Context, parent Ino, name string, allowUn
 	r.rdb.HDel(ctx, dentryKey(parent), name)
 	if attr.Nlink == 0 {
 		r.rdb.Del(ctx, inodeKey(dentry.Ino))
+		//log.WithField("inode", dentry.Ino).Infof("remove file")
 	} else if err := r.SetattrDirectly(ctx, dentry.Ino, attr); err != nil {
 		return errno(err)
 	}
@@ -525,21 +528,6 @@ func (r *RedisMeta) ReadUpdate(ctx context.Context, inode Ino) syscall.Errno {
 		return eno
 	}
 
-	SetTime(&attr.Atime, &attr.Atimensec, time.Now())
-	r.SetattrDirectly(ctx, inode, attr)
-	return syscall.F_OK
-}
-
-func (r *RedisMeta) WriteUpdate(ctx context.Context, inode Ino, length uint64) syscall.Errno {
-	attr, eno := r.Getattr(ctx, inode)
-	if eno != syscall.F_OK {
-		return eno
-	}
-
-	if attr.Length < length {
-		attr.Length = length
-	}
-	SetTime(&attr.Mtime, &attr.Mtimensec, time.Now())
 	SetTime(&attr.Atime, &attr.Atimensec, time.Now())
 	r.SetattrDirectly(ctx, inode, attr)
 	return syscall.F_OK

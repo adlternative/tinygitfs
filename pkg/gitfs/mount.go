@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/adlternative/tinygitfs/pkg/data"
 	"github.com/adlternative/tinygitfs/pkg/datasource"
-	"github.com/adlternative/tinygitfs/pkg/page"
 	"os"
 	"runtime"
 	"sync"
@@ -72,42 +71,8 @@ func (gitFs *GitFs) ReleaseFile(ctx context.Context, inode metadata.Ino) error {
 		return fmt.Errorf("cannot find the file want to release: %d", inode)
 	}
 	return file.UnRef(func() {
-		log.WithFields(
-			log.Fields{
-				"inode": inode,
-			}).Debug("Release File")
-
 		delete(gitFs.files, inode)
 	})
-}
-
-func (gitFs *GitFs) Truncate(ctx context.Context, inode metadata.Ino, size uint64) error {
-	log.WithFields(
-		log.Fields{
-			"inode": inode,
-			"size":  size,
-		}).Debug("GitFs Truncate")
-
-	gitFs.filesMu.Lock()
-	defer gitFs.filesMu.Unlock()
-
-	lastPageNum := int64(size / page.PageSize)
-	lastPageLength := int(size % page.PageSize)
-
-	file, ok := GlobalGitFs.files[inode]
-	if ok {
-		err := file.Truncate(ctx, size)
-		if err != nil {
-			return err
-		}
-	}
-	//truncate meta chunks attr
-	err := gitFs.Meta.TruncateChunkMeta(ctx, inode, lastPageNum, lastPageLength)
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) (*GitFs, error) {
@@ -228,6 +193,10 @@ func (node *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (node *Node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if f != nil {
+		return f.(*FileHandler).Getattr(ctx, out)
+	}
+
 	log.WithFields(
 		log.Fields{
 			"inode": node.inode,
@@ -381,8 +350,8 @@ func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 	log.WithFields(
 		log.Fields{
-			"name":         name,
-			"parent inode": node.inode,
+			"name":  name,
+			"inode": node.inode,
 		}).Debug("Unlink")
 	return node.Meta.Unlink(ctx, node.inode, name)
 }
@@ -390,12 +359,6 @@ func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	fields := log.Fields{}
 	fields = make(map[string]interface{})
-
-	attr, eno := node.Meta.Getattr(ctx, node.inode)
-	if eno != syscall.F_OK {
-		return eno
-	}
-
 	fields["inode"] = node.inode
 
 	if atime, ok := in.GetATime(); ok {
@@ -418,6 +381,15 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	}
 	log.WithFields(fields).Debug("Setattr")
 
+	if f != nil {
+		return f.(*FileHandler).Setattr(ctx, in, out)
+	}
+
+	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	if eno != syscall.F_OK {
+		return eno
+	}
+
 	if atime, ok := in.GetATime(); ok {
 		metadata.SetTime(&attr.Atime, &attr.Atimensec, atime)
 	}
@@ -434,13 +406,6 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 		attr.Mode = uint16(mode)
 	}
 	if size, ok := in.GetSize(); ok {
-		if size < attr.Length {
-			// invalid pages
-			err := GlobalGitFs.Truncate(ctx, node.inode, size)
-			if err != nil {
-				return syscall.EIO
-			}
-		}
 		attr.Length = size
 	}
 

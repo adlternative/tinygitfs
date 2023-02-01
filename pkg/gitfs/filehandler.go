@@ -46,7 +46,7 @@ func NewFile(ctx context.Context, inode metadata.Ino, dataSource datasource.Data
 				break loop
 			case <-timer.C:
 				if err := pagePool.Fsync(ctx); err != nil {
-					log.WithError(err).Error("page pool fsync failed")
+					log.WithField("inode", inode).WithError(err).Error("page pool fsync failed")
 				}
 			}
 		}
@@ -94,13 +94,12 @@ func (file *File) Ref() int {
 	return file.ref
 }
 
-func (file *File) Truncate(ctx context.Context, size uint64) error {
-	file.pagePool.Truncate(ctx, size)
-	return nil
-}
-
 func (file *File) Release(ctx context.Context) error {
 	return file.gitfs.ReleaseFile(ctx, file.inode)
+}
+
+func (file *File) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	return file.pagePool.Setattr(ctx, in, out)
 }
 
 var _ = (fs.FileHandle)((*FileHandler)(nil))
@@ -109,6 +108,30 @@ var _ = (fs.FileReader)((*FileHandler)(nil))
 var _ = (fs.FileFlusher)((*FileHandler)(nil))
 var _ = (fs.FileFsyncer)((*FileHandler)(nil))
 var _ = (fs.FileReleaser)((*FileHandler)(nil))
+var _ = (fs.FileGetattrer)((*FileHandler)(nil))
+var _ = (fs.FileSetattrer)((*FileHandler)(nil))
+
+func (fh *FileHandler) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	return fh.file.Setattr(ctx, in, out)
+}
+
+func (fh *FileHandler) getattr(ctx context.Context) (*metadata.Attr, syscall.Errno) {
+	attr, eno := fh.file.Meta.Getattr(ctx, fh.file.inode)
+	if eno != 0 {
+		return nil, eno
+	}
+	fh.file.pagePool.MemAttr().CopyToAttr(attr)
+	return attr, eno
+}
+
+func (fh *FileHandler) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
+	attr, eno := fh.getattr(ctx)
+	if eno != 0 {
+		return eno
+	}
+	metadata.ToAttrOut(fh.file.inode, attr, &out.Attr)
+	return syscall.F_OK
+}
 
 func (fh *FileHandler) Release(ctx context.Context) syscall.Errno {
 	log.WithFields(
@@ -183,10 +206,5 @@ func (fh *FileHandler) Read(ctx context.Context, dest []byte, off int64) (fuse.R
 		log.WithError(err).Errorf("pagePool Read failed")
 		return result, syscall.EIO
 	}
-	eno := fh.file.Meta.ReadUpdate(ctx, fh.file.inode)
-	if eno != syscall.F_OK {
-		return result, eno
-	}
-
 	return result, syscall.F_OK
 }
