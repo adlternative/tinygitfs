@@ -74,7 +74,7 @@ func (p *Pool) TruncateWithLock(ctx context.Context, size uint64) error {
 			if !ok {
 				return fmt.Errorf("pagepool cache key %d peek failed", pageNum)
 			}
-			page.size = int64(lastPageLength)
+			page.Truncate(int64(lastPageLength))
 		}
 	}
 
@@ -89,6 +89,10 @@ func (p *Pool) Fsync(ctx context.Context) error {
 	attr, eno := p.Meta.Getattr(ctx, p.inode)
 	if eno != syscall.F_OK {
 		if eno == syscall.ENOENT {
+			log.WithFields(
+				log.Fields{
+					"inode": p.inode,
+				}).Debugf("fsync: inode not found, but ignore the error")
 			return nil
 		}
 		return eno
@@ -145,12 +149,8 @@ func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error
 	leftSize := totalSize
 	curOffset := off
 	dataOffset := int64(0)
-	memattr := p.MemAttr()
 
 	for leftSize > 0 {
-
-		fileLength := int64(memattr.Length())
-
 		pageNum := curOffset / PageSize
 		pageOffset := curOffset % PageSize
 		dataLen := PageSize - pageOffset
@@ -158,12 +158,7 @@ func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error
 			dataLen = leftSize
 		}
 
-		pageSize := PageSize
-		if fileLength-curOffset < PageSize &&
-			fileLength-curOffset > 0 {
-			pageSize = int(fileLength - curOffset)
-		}
-		page, err := p.getPage(ctx, pageNum, pageSize)
+		page, err := p.getPage(ctx, pageNum)
 		if err != nil {
 			return uint32(totalSize - leftSize), err
 		}
@@ -173,7 +168,7 @@ func (p *Pool) Write(ctx context.Context, data []byte, off int64) (uint32, error
 		leftSize -= dataLen
 		dataOffset += dataLen
 		curOffset = (pageNum + 1) * PageSize
-		memattr.UpdateLengthIfMore(uint64(off + totalSize - leftSize))
+		p.MemAttr().UpdateLengthIfMore(uint64(off + totalSize - leftSize))
 	}
 	return uint32(totalSize - leftSize), nil
 }
@@ -199,13 +194,7 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 		pageNum := curOffset / PageSize
 		pageOffset := curOffset % PageSize
 
-		pageSize := PageSize
-		if fileLength-curOffset < PageSize &&
-			fileLength-curOffset > 0 {
-			pageSize = int(fileLength - curOffset)
-		}
-
-		page, find, err := p.checkPage(ctx, pageNum, pageSize)
+		page, find, err := p.checkPage(ctx, pageNum)
 		if err != nil {
 			return fuse.ReadResultData(dest[:totalSize-leftSize]), err
 		}
@@ -219,18 +208,28 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 		leftSize -= dataSize
 		dataOffset += dataSize
 		curOffset = (pageNum + 1) * PageSize
+
+		if dataSize < PageSize {
+			break
+		}
 	}
 
 	return fuse.ReadResultData(dest[:totalSize-leftSize]), nil
 }
 
 // getPage if cache have the page, return it; otherwise load from disk
-func (p *Pool) getPage(ctx context.Context, pageNum int64, pageSize int) (*Page, error) {
+func (p *Pool) getPage(ctx context.Context, pageNum int64) (*Page, error) {
+	if int64(p.MemAttr().Length()) <= pageNum*PageSize {
+		page := NewPage(pageNum)
+		p.cache.Add(pageNum, page)
+		return page, nil
+	}
+
 	page, find := p.cache.Get(pageNum)
 	if !find {
 		var err error
 
-		page, find, err = p.loadPage(ctx, pageNum, pageSize)
+		page, find, err = p.loadPage(ctx, pageNum)
 		if err != nil {
 			return nil, err
 		}
@@ -243,12 +242,16 @@ func (p *Pool) getPage(ctx context.Context, pageNum int64, pageSize int) (*Page,
 }
 
 // CheckPage check if cache and disk have the chunk, if so, load it to page; else return non-exist
-func (p *Pool) checkPage(ctx context.Context, pageNum int64, pageSize int) (*Page, bool, error) {
+func (p *Pool) checkPage(ctx context.Context, pageNum int64) (*Page, bool, error) {
+	if int64(p.MemAttr().Length()) <= pageNum*PageSize {
+		return nil, false, nil
+	}
+
 	page, find := p.cache.Get(pageNum)
 	if !find {
 		var err error
 
-		page, find, err = p.loadPage(ctx, pageNum, pageSize)
+		page, find, err = p.loadPage(ctx, pageNum)
 		if err != nil {
 			return nil, false, err
 		}
@@ -261,7 +264,7 @@ func (p *Pool) checkPage(ctx context.Context, pageNum int64, pageSize int) (*Pag
 }
 
 // loadPage check if disk have the page, if so, load it; else return false
-func (p *Pool) loadPage(ctx context.Context, pageNum int64, pageSize int) (*Page, bool, error) {
+func (p *Pool) loadPage(ctx context.Context, pageNum int64) (*Page, bool, error) {
 	var page *Page
 
 	chunkAttr, find, err := p.Meta.GetChunkMeta(ctx, p.inode, pageNum)
@@ -272,17 +275,11 @@ func (p *Pool) loadPage(ctx context.Context, pageNum int64, pageSize int) (*Page
 		return nil, false, nil
 	}
 
-	if pageSize > PageSize {
-		return nil, false, fmt.Errorf("loadPage pageSize out of range")
-	} else if pageSize == -1 || pageSize > chunkAttr.Length {
-		pageSize = chunkAttr.Length
-	}
-
-	reader, err := p.Data.Get(chunkAttr.StoragePath, 0, int64(pageSize))
+	reader, err := p.Data.Get(chunkAttr.StoragePath, 0, PageSize)
 	if err != nil {
 		return nil, false, err
 	} else {
-		page, err = NewPageWithReader(pageNum, reader, int64(pageSize))
+		page, err = NewPageWithReader(pageNum, reader, PageSize)
 		if err != nil {
 			return nil, false, err
 		}

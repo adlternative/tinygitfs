@@ -20,6 +20,15 @@ type Page struct {
 	mu         *sync.RWMutex
 }
 
+func (p *Page) Truncate(size int64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.size > size {
+		p.size = size
+		p.clean = false
+	}
+}
+
 func (p *Page) Write(offset int64, data []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -54,6 +63,14 @@ func (p *Page) Fsync(ctx context.Context, source datasource.DataSource, inode me
 	if p.clean {
 		return nil
 	}
+
+	log.WithFields(
+		log.Fields{
+			"inode":   inode,
+			"pageNum": p.pageNumber,
+			"size":    p.size,
+		}).Debug("Page Fsync")
+
 	// TODO txn
 	path := storagePath(inode, p.pageNumber)
 	err := source.Data.Put(path, bytes.NewReader(p.data[:p.size]))
