@@ -1,7 +1,6 @@
 package page
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -41,7 +40,7 @@ func NewPagePool(ctx context.Context, dataSource datasource.DataSource, inode me
 
 	cache, err := lru.NewWithEvict[int64, *Page](PoolSize/PageSize,
 		func(pageNum int64, page *Page) {
-			err := pool.fSyncPage(ctx, page)
+			err := page.Fsync(ctx, dataSource, inode)
 			if err != nil {
 				log.WithFields(log.Fields{
 					"pageNum": pageNum,
@@ -130,7 +129,7 @@ func (p *Pool) fsync(ctx context.Context, checkFn func(int64) bool) error {
 		if !ok {
 			return fmt.Errorf("pagepool cache key %d peek failed", k)
 		}
-		err := p.fSyncPage(ctx, page)
+		err := page.Fsync(ctx, p.DataSource, p.inode)
 		if err != nil {
 			return err
 		}
@@ -223,30 +222,6 @@ func (p *Pool) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResul
 	}
 
 	return fuse.ReadResultData(dest[:totalSize-leftSize]), nil
-}
-
-func (p *Pool) fSyncPage(ctx context.Context, page *Page) error {
-	page.mu.Lock()
-	defer page.mu.Unlock()
-
-	if page.clean {
-		return nil
-	}
-	// TODO txn
-	path := storagePath(p.inode, page.pageNumber)
-	err := p.Data.Put(path, bytes.NewReader(page.data[:page.size]))
-	if err != nil {
-		log.WithError(err).Errorf("set chunk data failed")
-		return err
-	}
-	err = p.Meta.SetChunkMeta(ctx, p.inode, page.pageNumber, page.pageNumber*PageSize, int(page.size), path)
-	if err != nil {
-		log.WithError(err).Errorf("set chunk metadata failed")
-		return err
-	}
-
-	page.clean = true
-	return nil
 }
 
 // getPage if cache have the page, return it; otherwise load from disk

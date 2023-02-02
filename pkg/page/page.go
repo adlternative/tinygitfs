@@ -1,6 +1,10 @@
 package page
 
 import (
+	"bytes"
+	"context"
+	"github.com/adlternative/tinygitfs/pkg/datasource"
+	"github.com/adlternative/tinygitfs/pkg/metadata"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"sync"
@@ -41,6 +45,30 @@ func (p *Page) Read(offset int64, data []byte, length int64) int64 {
 
 	copy(data[:length], p.data[offset:offset+length])
 	return length
+}
+
+func (p *Page) Fsync(ctx context.Context, source datasource.DataSource, inode metadata.Ino) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.clean {
+		return nil
+	}
+	// TODO txn
+	path := storagePath(inode, p.pageNumber)
+	err := source.Data.Put(path, bytes.NewReader(p.data[:p.size]))
+	if err != nil {
+		log.WithError(err).Errorf("set chunk data failed")
+		return err
+	}
+	err = source.Meta.SetChunkMeta(ctx, inode, p.pageNumber, p.pageNumber*PageSize, int(p.size), path)
+	if err != nil {
+		log.WithError(err).Errorf("set chunk metadata failed")
+		return err
+	}
+
+	p.clean = true
+	return nil
 }
 
 func NewPage(pageNumber int64) *Page {
