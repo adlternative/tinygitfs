@@ -191,8 +191,8 @@ func (r *RedisMeta) MkNod(ctx context.Context, parent Ino, _type uint8, name str
 	attr.Typ = _type
 	attr.Mode = uint16(mode)
 	attr.Rdev = dev
-	attr.Uid = uint32(os.Getuid())
-	attr.Gid = uint32(os.Getgid())
+	attr.Uid = uint32(uid)
+	attr.Gid = uint32(gid)
 
 	if _type == TypeDirectory {
 		attr.Nlink = 2
