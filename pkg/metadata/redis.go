@@ -14,6 +14,11 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const TotalInode = "totalinode"
+const CurInode = "nextinode"
+const UsedSpace = "usedspace"
+const TotalSpace = "totalspace"
+
 type RedisMeta struct {
 	rdb *redis.Client
 }
@@ -70,11 +75,19 @@ func (r *RedisMeta) Init(ctx context.Context) error {
 	SetTime(&rootAttr.Ctime, &rootAttr.Ctimensec, ts)
 
 	// root attr 序列化后写到 i1
-	jsonAttr, err := json.Marshal(&rootAttr)
+	err := r.SetattrDirectly(ctx, rootInode, rootAttr)
 	if err != nil {
 		return err
 	}
-	return r.rdb.Set(ctx, inodeKey(rootInode), jsonAttr, 0).Err()
+	r.SetTotalInodeCount(ctx, 1<<30)
+	if err != nil {
+		return err
+	}
+	r.SetTotalSpace(ctx, 1<<30)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func errno(err error) syscall.Errno {
@@ -360,7 +373,7 @@ func (r *RedisMeta) unlink(ctx context.Context, parent Ino, name string, allowUn
 	r.rdb.HDel(ctx, dentryKey(parent), name)
 	if attr.Nlink == 0 {
 		r.rdb.Del(ctx, inodeKey(dentry.Ino))
-		//log.WithField("inode", dentry.Ino).Infof("remove file")
+		r.UpdateUsedSpace(ctx, -Align4K(attr.Length))
 	} else if err := r.SetattrDirectly(ctx, dentry.Ino, attr); err != nil {
 		return errno(err)
 	}
@@ -421,17 +434,57 @@ func (r *RedisMeta) Rename(ctx context.Context, parent Ino, oldName string, newP
 
 // nextInode get next inode which can be used
 func (r *RedisMeta) nextInode(ctx context.Context) (Ino, error) {
-	ino, err := r.rdb.Incr(ctx, "nextinode").Uint64()
+	ino, err := r.rdb.Incr(ctx, CurInode).Uint64()
 	if err != nil {
 		return -1, err
 	}
 	if ino == 1 {
-		ino, err = r.rdb.Incr(ctx, "nextinode").Uint64()
+		ino, err = r.rdb.Incr(ctx, CurInode).Uint64()
 		if err != nil {
 			return -1, err
 		}
 	}
 	return Ino(ino), err
+}
+
+func (r *RedisMeta) SetTotalInodeCount(ctx context.Context, totalInodeCount uint64) error {
+	return r.rdb.Set(ctx, TotalInode, totalInodeCount, -1).Err()
+}
+
+func (r *RedisMeta) TotalInodeCount(ctx context.Context) (uint64, error) {
+	return r.rdb.Get(ctx, TotalInode).Uint64()
+}
+
+func (r *RedisMeta) CurInodeCount(ctx context.Context) (uint64, error) {
+	ino, err := r.rdb.Get(ctx, CurInode).Uint64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return ino, err
+}
+
+func (r *RedisMeta) UpdateUsedSpace(ctx context.Context, size int64) error {
+	return r.rdb.IncrBy(ctx, UsedSpace, size).Err()
+}
+
+func (r *RedisMeta) SetUseSpace(ctx context.Context, size int64) error {
+	return r.rdb.Set(ctx, UsedSpace, size, -1).Err()
+}
+
+func (r *RedisMeta) UsedSpace(ctx context.Context) (uint64, error) {
+	usedSpace, err := r.rdb.Get(ctx, UsedSpace).Uint64()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	return usedSpace, err
+}
+
+func (r *RedisMeta) SetTotalSpace(ctx context.Context, totalSpace uint64) error {
+	return r.rdb.Set(ctx, TotalSpace, totalSpace, -1).Err()
+}
+
+func (r *RedisMeta) TotalSpace(ctx context.Context) (uint64, error) {
+	return r.rdb.Get(ctx, TotalSpace).Uint64()
 }
 
 // SetChunkMeta

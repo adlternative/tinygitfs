@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/adlternative/tinygitfs/pkg/data"
 	"github.com/adlternative/tinygitfs/pkg/datasource"
+	"github.com/adlternative/tinygitfs/pkg/page"
 	"os"
 	"runtime"
 	"sync"
@@ -121,6 +122,56 @@ var _ = (fs.NodeSetattrer)((*Node)(nil))
 var _ = (fs.NodeRenamer)((*Node)(nil))
 var _ = (fs.NodeLinker)((*Node)(nil))
 var _ = (fs.NodeOpener)((*Node)(nil))
+var _ = (fs.NodeStatfser)((*Node)(nil))
+
+func (node *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
+	out.NameLen = 255
+	out.Frsize = page.PageSize
+	out.Bsize = page.PageSize
+
+	totalInodeCount, err := node.Meta.TotalInodeCount(ctx)
+	if err != nil {
+		log.WithError(err).Errorf("Statfs failed to get total inode count")
+		return syscall.EIO
+	}
+	out.Files = totalInodeCount
+
+	curInodeCount, err := node.Meta.CurInodeCount(ctx)
+	if err != nil {
+		log.WithError(err).Errorf("Statfs failed to get cur inode count")
+		return syscall.EIO
+	}
+	out.Ffree = totalInodeCount - curInodeCount
+
+	useSpace, err := node.Meta.UsedSpace(ctx)
+	if err != nil {
+		log.WithError(err).Errorf("Statfs failed to get used space")
+		return syscall.EIO
+	}
+	totalSpace, err := node.Meta.TotalSpace(ctx)
+	if err != nil {
+		log.WithError(err).Errorf("Statfs failed to get total space")
+		return syscall.EIO
+	}
+	out.Blocks = totalSpace / uint64(out.Bsize)
+	out.Bfree = (totalSpace - useSpace) / uint64(out.Bsize)
+	out.Bavail = out.Bfree
+
+	log.WithFields(
+		log.Fields{
+			"totalInodeCount": totalInodeCount,
+			"curInodeCount":   curInodeCount,
+			"totalSpace":      totalSpace,
+			"usedSpace":       useSpace,
+			"blocks":          out.Blocks,
+			"bfree":           out.Bfree,
+			"bavail":          out.Bavail,
+			"ffree":           out.Ffree,
+			"files":           out.Files,
+		}).Debug("Statfs")
+
+	return syscall.F_OK
+}
 
 func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string, out *fuse.EntryOut) (newNode *fs.Inode, errno syscall.Errno) {
 	log.WithFields(

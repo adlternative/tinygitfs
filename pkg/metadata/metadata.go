@@ -236,3 +236,10 @@ func (ds *DirStream) Next() (de fuse.DirEntry, eno syscall.Errno) {
 func (ds *DirStream) Close() {
 	// nothing
 }
+
+func Align4K(length uint64) int64 {
+	if length == 0 {
+		return 1 << 12
+	}
+	return int64((((length - 1) >> 12) + 1) << 12)
+}
