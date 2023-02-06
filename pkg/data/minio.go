@@ -106,23 +106,6 @@ func (s *MinioData) Create() error {
 	return err
 }
 
-func (s *MinioData) Head(key string) (Object, error) {
-	param := s3.HeadObjectInput{
-		Bucket: &s.bucket,
-		Key:    &key,
-	}
-	r, err := s.s3.HeadObject(&param)
-	if err != nil {
-		return nil, err
-	}
-	return &obj{
-		key,
-		*r.ContentLength,
-		*r.LastModified,
-		strings.HasSuffix(key, "/"),
-	}, nil
-}
-
 func (s *MinioData) Get(key string, off, limit int64) (io.ReadCloser, error) {
 	log.WithFields(log.Fields{
 		"key":   key,
@@ -177,17 +160,6 @@ func (s *MinioData) Put(key string, in io.Reader) error {
 	return err
 }
 
-func (s *MinioData) Copy(dst, src string) error {
-	src = s.bucket + "/" + src
-	params := &s3.CopyObjectInput{
-		Bucket:     &s.bucket,
-		Key:        &dst,
-		CopySource: &src,
-	}
-	_, err := s.s3.CopyObject(params)
-	return err
-}
-
 func (s *MinioData) Delete(key string) error {
 	param := s3.DeleteObjectInput{
 		Bucket: &s.bucket,
@@ -220,104 +192,6 @@ func (s *MinioData) List(prefix, marker string, limit int64) ([]Object, error) {
 		}
 	}
 	return objs, nil
-}
-
-func (s *MinioData) ListAll(prefix, marker string) (<-chan Object, error) {
-	return nil, errNotSupported
-}
-
-type MultipartUpload struct {
-	MinPartSize int
-	MaxCount    int
-	UploadID    string
-}
-
-type Part struct {
-	Num  int
-	Size int
-	ETag string
-}
-
-type PendingPart struct {
-	Key      string
-	UploadID string
-	Created  time.Time
-}
-
-func (s *MinioData) CreateMultipartUpload(key string) (*MultipartUpload, error) {
-	params := &s3.CreateMultipartUploadInput{
-		Bucket: &s.bucket,
-		Key:    &key,
-	}
-	resp, err := s.s3.CreateMultipartUpload(params)
-	if err != nil {
-		return nil, err
-	}
-
-	return &MultipartUpload{UploadID: *resp.UploadId, MinPartSize: 5 << 20, MaxCount: 10000}, nil
-}
-
-func (s *MinioData) UploadPart(key string, uploadID string, num int, body []byte) (*Part, error) {
-	n := int64(num)
-	params := &s3.UploadPartInput{
-		Bucket:     &s.bucket,
-		Key:        &key,
-		UploadId:   &uploadID,
-		Body:       bytes.NewReader(body),
-		PartNumber: &n,
-	}
-	resp, err := s.s3.UploadPart(params)
-	if err != nil {
-		return nil, err
-	}
-	return &Part{Num: num, ETag: *resp.ETag}, nil
-}
-
-func (s *MinioData) AbortMultipartUpload(key string, uploadID string) {
-	params := &s3.AbortMultipartUploadInput{
-		Bucket:   &s.bucket,
-		Key:      &key,
-		UploadId: &uploadID,
-	}
-	_, _ = s.s3.AbortMultipartUpload(params)
-}
-
-func (s *MinioData) CompleteMultipartUpload(key string, uploadID string, parts []*Part) error {
-	var s3Parts []*s3.CompletedPart
-	for i := range parts {
-		n := new(int64)
-		*n = int64(parts[i].Num)
-		s3Parts = append(s3Parts, &s3.CompletedPart{ETag: &parts[i].ETag, PartNumber: n})
-	}
-	params := &s3.CompleteMultipartUploadInput{
-		Bucket:          &s.bucket,
-		Key:             &key,
-		UploadId:        &uploadID,
-		MultipartUpload: &s3.CompletedMultipartUpload{Parts: s3Parts},
-	}
-	_, err := s.s3.CompleteMultipartUpload(params)
-	return err
-}
-
-func (s *MinioData) ListMultipartUploads(marker string) ([]*PendingPart, string, error) {
-	input := &s3.ListMultipartUploadsInput{
-		Bucket:    aws.String(s.bucket),
-		KeyMarker: aws.String(marker),
-	}
-
-	result, err := s.s3.ListMultipartUploads(input)
-	if err != nil {
-		return nil, "", err
-	}
-	parts := make([]*PendingPart, len(result.Uploads))
-	for i, u := range result.Uploads {
-		parts[i] = &PendingPart{*u.Key, *u.UploadId, *u.Initiated}
-	}
-	var nextMarker string
-	if result.NextKeyMarker != nil {
-		nextMarker = *result.NextKeyMarker
-	}
-	return parts, nextMarker, nil
 }
 
 func (s *MinioData) Init() error {
