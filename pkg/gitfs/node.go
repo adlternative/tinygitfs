@@ -90,7 +90,7 @@ func (node *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno
 			"bavail":          out.Bavail,
 			"ffree":           out.Ffree,
 			"files":           out.Files,
-		}).Debug("Statfs")
+		}).Trace("Statfs")
 
 	return syscall.F_OK
 }
