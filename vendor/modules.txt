@@ -65,7 +65,7 @@ github.com/go-redis/redis/v8/internal/pool
 github.com/go-redis/redis/v8/internal/proto
 github.com/go-redis/redis/v8/internal/rand
 github.com/go-redis/redis/v8/internal/util
-# github.com/hanwen/go-fuse/v2 v2.2.0
+# github.com/hanwen/go-fuse/v2 v2.2.1-0.20230205184629-615a0a7e1178
 ## explicit; go 1.13
 github.com/hanwen/go-fuse/v2/fs
 github.com/hanwen/go-fuse/v2/fuse

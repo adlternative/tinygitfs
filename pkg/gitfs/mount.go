@@ -198,9 +198,6 @@ func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string
 
 func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	newParentInode := newParent.EmbeddedInode().StableAttr().Ino
-	if newParentInode == 0 {
-		newParentInode = 1
-	}
 
 	log.WithFields(
 		log.Fields{
@@ -504,6 +501,10 @@ func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, d
 
 	server, err := fs.Mount(mntDir, GlobalGitFs, &fs.Options{
 		MountOptions: opts,
+		RootStableAttr: &fs.StableAttr{
+			Ino: uint64(GlobalGitFs.inode),
+			Gen: 1,
+		},
 	})
 	if err != nil {
 		return nil, err
