@@ -109,22 +109,21 @@ func (p *Pool) Fsync(ctx context.Context) error {
 	memattr := p.MemAttr()
 	memattr.CopyToAttr(attr)
 	p.Meta.SetattrDirectly(ctx, p.inode, attr)
-	if memattr.Length() > curLength {
-		err = p.Meta.UpdateUsedSpace(ctx, metadata.Align4K(memattr.Length()-curLength))
+	if attr.Length > curLength {
+		err = p.Meta.UpdateUsedSpace(ctx, metadata.Align4K(attr.Length-curLength))
 		if err != nil {
 			return err
 		}
-	} else if memattr.Length() < curLength {
+	} else if attr.Length < curLength {
 		// if file truncate, chunk metadata -> redis
 		lastPageNum := int64(attr.Length / PageSize)
 		lastPageLength := int(attr.Length % PageSize)
-
 		err = p.Meta.TruncateChunkMeta(ctx, p.inode, lastPageNum, lastPageLength)
 		if err != nil {
 			return err
 		}
 
-		err = p.Meta.UpdateUsedSpace(ctx, -metadata.Align4K(curLength-memattr.Length()))
+		err = p.Meta.UpdateUsedSpace(ctx, -metadata.Align4K(curLength-attr.Length))
 		if err != nil {
 			return err
 		}

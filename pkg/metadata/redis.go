@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -489,8 +490,6 @@ func (r *RedisMeta) TotalSpace(ctx context.Context) (uint64, error) {
 
 // SetChunkMeta
 // inode[pagenum] -> { offset. length, storagePath }
-// because redis hash cannot support trim easily,
-// so it will better to use redis list to do this.
 func (r *RedisMeta) SetChunkMeta(ctx context.Context, inode Ino, pageNum int64, offset int64, lens int, storagePath string) error {
 	log.WithFields(log.Fields{
 		"inode":       inode,
@@ -509,25 +508,17 @@ func (r *RedisMeta) SetChunkMeta(ctx context.Context, inode Ino, pageNum int64, 
 		return err
 	}
 
-	totalPageNum, err := r.rdb.LLen(ctx, chunkKey(inode)).Result()
-	if pageNum == totalPageNum {
-		return r.rdb.RPush(ctx, chunkKey(inode), jsonChunkAttr).Err()
-	} else if pageNum < totalPageNum {
-		return r.rdb.LSet(ctx, chunkKey(inode), pageNum, jsonChunkAttr).Err()
-	} else {
-		log.WithFields(
-			log.Fields{
-				"pageNum":      pageNum,
-				"totalPageNum": totalPageNum,
-			}).Errorf("set chunk meta out of file total pageNum")
-		return fmt.Errorf("set chunk meta out of file total pageNum")
+	err = r.rdb.HSet(ctx, chunkKey(inode), pageNum, jsonChunkAttr).Err()
+	if err != nil {
+		return err
 	}
+	return nil
 }
 
 func (r *RedisMeta) GetChunkMeta(ctx context.Context, inode Ino, pageNum int64) (*ChunkAttr, bool, error) {
 	chunkAttr := &ChunkAttr{}
 
-	jsonChunkAttr, err := r.rdb.LIndex(ctx, chunkKey(inode), pageNum).Bytes()
+	jsonChunkAttr, err := r.rdb.HGet(ctx, chunkKey(inode), strconv.FormatInt(pageNum, 10)).Bytes()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, false, nil
@@ -540,39 +531,44 @@ func (r *RedisMeta) GetChunkMeta(ctx context.Context, inode Ino, pageNum int64) 
 		return nil, false, err
 	}
 	return chunkAttr, true, nil
+
 }
 
-func (r *RedisMeta) TruncateChunkMeta(ctx context.Context, inode Ino, pageNum int64, lastPageLength int) error {
-	log.WithFields(
-		log.Fields{
-			"inode":          inode,
-			"pageNum":        pageNum,
-			"lastPageLength": lastPageLength,
-		}).Debug("TruncateChunkMeta")
-
-	err := r.rdb.LTrim(ctx, chunkKey(inode), 0, pageNum).Err()
-	if err != nil {
-		return err
-	}
-	if lastPageLength == 0 {
-		return r.rdb.RPop(ctx, chunkKey(inode)).Err()
-	}
-
-	lastChunkAttr, ok, err := r.GetChunkMeta(ctx, inode, pageNum)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return fmt.Errorf("cannot find last chunk attr, inode=%d, pageNum=%d", inode, pageNum)
-	}
-	lastChunkAttr.Length = lastPageLength
-
-	jsonChunkAttr, err := json.Marshal(lastChunkAttr)
+func (r *RedisMeta) TruncateChunkMeta(ctx context.Context, inode Ino, lastPageNum int64, lastPageLength int) error {
+	chunkAttrs, err := r.rdb.HGetAll(ctx, chunkKey(inode)).Result()
 	if err != nil {
 		return err
 	}
 
-	return r.rdb.LSet(ctx, chunkKey(inode), pageNum, jsonChunkAttr).Err()
+	for key, jsonChunkAttr := range chunkAttrs {
+		curPageNum, err := strconv.ParseInt(key, 10, 64)
+		if err != nil {
+			return err
+		}
+		if curPageNum > lastPageNum || (curPageNum == lastPageNum && lastPageLength == 0) {
+			err := r.rdb.HDel(ctx, chunkKey(inode), key).Err()
+			if err != nil {
+				return err
+			}
+		} else if curPageNum == lastPageNum {
+			chunkAttr := &ChunkAttr{}
+			err = json.Unmarshal([]byte(jsonChunkAttr), chunkAttr)
+			if err != nil {
+				return err
+			}
+			chunkAttr.Length = lastPageLength
+			jsonChunkAttr, err := json.Marshal(chunkAttr)
+			if err != nil {
+				return err
+			}
+
+			err = r.rdb.HSet(ctx, chunkKey(inode), lastPageNum, jsonChunkAttr).Err()
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (r *RedisMeta) ReadUpdate(ctx context.Context, inode Ino) syscall.Errno {

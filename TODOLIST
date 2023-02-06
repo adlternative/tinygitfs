@@ -1,4 +1,4 @@
-1. chunkattr 逻辑重写
+1. chunkattr 逻辑重写 ok
 2. loadPage 仍然读取一页 和 truncate 及时截断 ok
 3. NodeStatfser 获取文件系统信息 ok
 4. cache page 是否可能正在被驱逐的时候需要读取？
