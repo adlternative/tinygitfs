@@ -110,7 +110,7 @@ func (p *Pool) Fsync(ctx context.Context) error {
 	memattr.CopyToAttr(attr)
 	p.Meta.SetattrDirectly(ctx, p.inode, attr)
 	if attr.Length > curLength {
-		err = p.Meta.UpdateUsedSpace(ctx, metadata.Align4K(attr.Length-curLength))
+		err = p.Meta.UpdateUsedSpace(ctx, int64(attr.Length-curLength))
 		if err != nil {
 			return err
 		}
@@ -123,7 +123,7 @@ func (p *Pool) Fsync(ctx context.Context) error {
 			return err
 		}
 
-		err = p.Meta.UpdateUsedSpace(ctx, -metadata.Align4K(curLength-attr.Length))
+		err = p.Meta.UpdateUsedSpace(ctx, -int64(curLength-attr.Length))
 		if err != nil {
 			return err
 		}

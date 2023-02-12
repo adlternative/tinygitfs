@@ -374,7 +374,7 @@ func (r *RedisMeta) unlink(ctx context.Context, parent Ino, name string, allowUn
 	r.rdb.HDel(ctx, dentryKey(parent), name)
 	if attr.Nlink == 0 {
 		r.rdb.Del(ctx, inodeKey(dentry.Ino))
-		r.UpdateUsedSpace(ctx, -Align4K(attr.Length))
+		r.UpdateUsedSpace(ctx, -int64(attr.Length))
 	} else if err := r.SetattrDirectly(ctx, dentry.Ino, attr); err != nil {
 		return errno(err)
 	}
@@ -466,10 +466,6 @@ func (r *RedisMeta) CurInodeCount(ctx context.Context) (uint64, error) {
 
 func (r *RedisMeta) UpdateUsedSpace(ctx context.Context, size int64) error {
 	return r.rdb.IncrBy(ctx, UsedSpace, size).Err()
-}
-
-func (r *RedisMeta) SetUseSpace(ctx context.Context, size int64) error {
-	return r.rdb.Set(ctx, UsedSpace, size, -1).Err()
 }
 
 func (r *RedisMeta) UsedSpace(ctx context.Context) (uint64, error) {
