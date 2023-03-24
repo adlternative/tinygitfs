@@ -2,13 +2,14 @@ package gitfs
 
 import (
 	"context"
+	"syscall"
+
 	"github.com/adlternative/tinygitfs/pkg/datasource"
 	"github.com/adlternative/tinygitfs/pkg/metadata"
 	"github.com/adlternative/tinygitfs/pkg/page"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	log "github.com/sirupsen/logrus"
-	"syscall"
 )
 
 type NewNodeFn = func(dataSource datasource.DataSource, ino metadata.Ino, name string) fs.InodeEmbedder
@@ -32,6 +33,7 @@ type Node struct {
 	newNodeFn NewNodeFn
 }
 
+var _ = (fs.NodeAccesser)((*Node)(nil))
 var _ = (fs.NodeGetattrer)((*Node)(nil))
 var _ = (fs.NodeMknoder)((*Node)(nil))
 var _ = (fs.NodeMkdirer)((*Node)(nil))
@@ -45,6 +47,27 @@ var _ = (fs.NodeRenamer)((*Node)(nil))
 var _ = (fs.NodeLinker)((*Node)(nil))
 var _ = (fs.NodeOpener)((*Node)(nil))
 var _ = (fs.NodeStatfser)((*Node)(nil))
+
+func (node *Node) Access(ctx context.Context, mask uint32) syscall.Errno {
+	log.WithFields(
+		log.Fields{
+			"mask":  mask,
+			"inode": node.inode,
+		}).Trace("Access")
+
+	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	if eno != 0 {
+		return eno
+	}
+	mode := attr.Mode
+
+	lowMask := uint16(mask)
+	if (mode&lowMask != 0) || ((mode>>3)&lowMask != 0) || ((mode>>6)&lowMask != 0) {
+		return syscall.F_OK
+	}
+
+	return syscall.EACCES
+}
 
 func (node *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
 	out.NameLen = 255
