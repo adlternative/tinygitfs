@@ -13,10 +13,8 @@ import (
 	"sync"
 )
 
-var GlobalGitFs *GitFs
-
 type GitFs struct {
-	Node
+	*Node
 	files   map[metadata.Ino]*File
 	filesMu *sync.Mutex
 }
@@ -25,15 +23,15 @@ func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHand
 	var err error
 
 	gitFs.filesMu.Lock()
-	defer GlobalGitFs.filesMu.Unlock()
+	defer gitFs.filesMu.Unlock()
 
-	file, ok := GlobalGitFs.files[inode]
+	file, ok := gitFs.files[inode]
 	if !ok {
 		file, err = NewFile(ctx, inode, gitFs.DataSource, gitFs)
 		if err != nil {
 			return nil, err
 		}
-		GlobalGitFs.files[inode] = file
+		gitFs.files[inode] = file
 	}
 	return file.NewFileHandler(), nil
 }
@@ -70,25 +68,30 @@ func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) 
 		return nil, err
 	}
 
-	return &GitFs{
+	root := &Node{
+		inode: 1,
+		name:  "",
+		DataSource: datasource.DataSource{
+			Meta: Meta,
+			Data: minioData,
+		},
+		newNodeFn: defaultNewNode,
+	}
+
+	gitfs := &GitFs{
 		files:   make(map[metadata.Ino]*File),
 		filesMu: &sync.Mutex{},
-		Node: Node{
-			inode: 1,
-			name:  "",
-			DataSource: datasource.DataSource{
-				Meta: Meta,
-				Data: minioData,
-			},
-			newNodeFn: defaultNewNode,
-		},
-	}, nil
+		Node:    root,
+	}
+	root.gitfs = gitfs
+
+	return gitfs, nil
 }
 
 func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, dataOption *data.Option) (*fuse.Server, error) {
 	var err error
 
-	GlobalGitFs, err = NewGitFs(ctx, metaDataUrl, dataOption)
+	gitfs, err := NewGitFs(ctx, metaDataUrl, dataOption)
 	if err != nil {
 		return nil, err
 	}
@@ -118,10 +121,10 @@ func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, d
 		opts.Options = append(opts.Options, "daemon_timeout=60", "iosize=65536", "novncache")
 	}
 
-	server, err := fs.Mount(mntDir, GlobalGitFs, &fs.Options{
+	server, err := fs.Mount(mntDir, gitfs, &fs.Options{
 		MountOptions: opts,
 		RootStableAttr: &fs.StableAttr{
-			Ino: uint64(GlobalGitFs.inode),
+			Ino: uint64(gitfs.inode),
 			Gen: 1,
 		},
 	})

@@ -12,14 +12,15 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type NewNodeFn = func(dataSource datasource.DataSource, ino metadata.Ino, name string) fs.InodeEmbedder
+type NewNodeFn = func(dataSource datasource.DataSource, ino metadata.Ino, name string, gitFs *GitFs) fs.InodeEmbedder
 
-func defaultNewNode(dataSource datasource.DataSource, ino metadata.Ino, name string) fs.InodeEmbedder {
+func defaultNewNode(dataSource datasource.DataSource, ino metadata.Ino, name string, gitFs *GitFs) fs.InodeEmbedder {
 	return &Node{
 		inode:      ino,
 		name:       name,
 		DataSource: dataSource,
 		newNodeFn:  defaultNewNode,
+		gitfs:      gitFs,
 	}
 }
 
@@ -31,6 +32,8 @@ type Node struct {
 
 	datasource.DataSource
 	newNodeFn NewNodeFn
+
+	gitfs *GitFs
 }
 
 var _ = (fs.NodeAccesser)((*Node)(nil))
@@ -134,7 +137,7 @@ func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string
 
 	metadata.ToAttrOut(targetInode, attr, &out.Attr)
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, targetInode, name), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(node.DataSource, targetInode, name, node.gitfs), fs.StableAttr{
 		Mode: uint32(attr.Mode),
 		Ino:  uint64(targetInode),
 		Gen:  1,
@@ -222,7 +225,7 @@ func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 
 	//log.Printf("%s %d %o\n", name, entry.Ino, out.Attr.Mode)
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, entry.Ino, name), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(node.DataSource, entry.Ino, name, node.gitfs), fs.StableAttr{
 		Mode: uint32(out.Mode),
 		Ino:  uint64(entry.Ino),
 		Gen:  1,
@@ -248,7 +251,7 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 			"inode": ino,
 		}).Debug("Mkdir Result")
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name, node.gitfs), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
@@ -279,7 +282,7 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 			"inode": ino,
 		}).Debug("Mknod Result")
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name, node.gitfs), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
@@ -305,11 +308,11 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 			"inode": ino,
 		}).Debug("Create Result")
 
-	fileHandler, err := GlobalGitFs.OpenFile(ctx, ino)
+	fileHandler, err := node.gitfs.OpenFile(ctx, ino)
 	if err != nil {
 		return nil, 0, 0, syscall.ENOENT
 	}
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name, node.gitfs), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
@@ -323,7 +326,7 @@ func (node *Node) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fus
 			"inode": node.inode,
 		}).Debug("Open")
 
-	fh, err := GlobalGitFs.OpenFile(ctx, node.inode)
+	fh, err := node.gitfs.OpenFile(ctx, node.inode)
 	if err != nil {
 		return nil, 0, syscall.EIO
 	}
