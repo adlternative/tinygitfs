@@ -6,7 +6,7 @@ A little tiny gitfs
 ```shell
 # run redis
 $ docker run -d --name redis \
-        -v redis-data:/data \
+        -v $PWD/redis-data:/data \
         -p 6379:6379 \
         --restart unless-stopped \
         redis redis-server --appendonly yes
