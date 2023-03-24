@@ -17,6 +17,8 @@ type GitFs struct {
 	*Node
 	files   map[metadata.Ino]*File
 	filesMu *sync.Mutex
+
+	DefaultDataSource *datasource.DataSource
 }
 
 func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHandler, error) {
@@ -27,7 +29,7 @@ func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHand
 
 	file, ok := gitFs.files[inode]
 	if !ok {
-		file, err = NewFile(ctx, inode, gitFs.DataSource, gitFs)
+		file, err = NewFile(ctx, inode, gitFs.DefaultDataSource, gitFs)
 		if err != nil {
 			return nil, err
 		}
@@ -69,12 +71,8 @@ func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) 
 	}
 
 	root := &Node{
-		inode: 1,
-		name:  "",
-		DataSource: datasource.DataSource{
-			Meta: Meta,
-			Data: minioData,
-		},
+		inode:     1,
+		name:      "",
 		newNodeFn: defaultNewNode,
 	}
 
@@ -82,6 +80,10 @@ func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) 
 		files:   make(map[metadata.Ino]*File),
 		filesMu: &sync.Mutex{},
 		Node:    root,
+		DefaultDataSource: &datasource.DataSource{
+			Meta: Meta,
+			Data: minioData,
+		},
 	}
 	root.gitfs = gitfs
 

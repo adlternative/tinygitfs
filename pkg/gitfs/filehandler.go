@@ -19,7 +19,7 @@ type File struct {
 	inode    metadata.Ino
 	pagePool *page.Pool
 	ref      int
-	datasource.DataSource
+	*datasource.DataSource
 	mu          *sync.Mutex
 	releaseOnce *sync.Once
 	gitfs       *GitFs
@@ -29,7 +29,7 @@ type FileHandler struct {
 	file *File
 }
 
-func NewFile(ctx context.Context, inode metadata.Ino, dataSource datasource.DataSource, gitFs *GitFs) (*File, error) {
+func NewFile(ctx context.Context, inode metadata.Ino, dataSource *datasource.DataSource, gitFs *GitFs) (*File, error) {
 	pagePool, err := page.NewPagePool(ctx, dataSource, inode)
 	if err != nil {
 		return nil, err

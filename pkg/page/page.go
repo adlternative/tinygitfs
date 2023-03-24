@@ -56,7 +56,7 @@ func (p *Page) Read(offset int64, data []byte, length int64) int64 {
 	return length
 }
 
-func (p *Page) Fsync(ctx context.Context, source datasource.DataSource, inode metadata.Ino) error {
+func (p *Page) Fsync(ctx context.Context, source *datasource.DataSource, inode metadata.Ino) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

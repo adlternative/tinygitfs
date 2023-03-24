@@ -19,13 +19,13 @@ const PoolSize = 64 << 20
 type Pool struct {
 	inode metadata.Ino
 	cache *lru.Cache[int64, *Page]
-	datasource.DataSource
+	*datasource.DataSource
 
 	mu      *sync.RWMutex
 	memAttr *MemAttr
 }
 
-func NewPagePool(ctx context.Context, dataSource datasource.DataSource, inode metadata.Ino) (*Pool, error) {
+func NewPagePool(ctx context.Context, dataSource *datasource.DataSource, inode metadata.Ino) (*Pool, error) {
 	pool := &Pool{
 		inode:      inode,
 		DataSource: dataSource,

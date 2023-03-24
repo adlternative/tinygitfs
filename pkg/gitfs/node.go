@@ -4,7 +4,6 @@ import (
 	"context"
 	"syscall"
 
-	"github.com/adlternative/tinygitfs/pkg/datasource"
 	"github.com/adlternative/tinygitfs/pkg/metadata"
 	"github.com/adlternative/tinygitfs/pkg/page"
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -12,15 +11,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type NewNodeFn = func(dataSource datasource.DataSource, ino metadata.Ino, name string, gitFs *GitFs) fs.InodeEmbedder
+type NewNodeFn = func(ino metadata.Ino, name string, gitFs *GitFs) fs.InodeEmbedder
 
-func defaultNewNode(dataSource datasource.DataSource, ino metadata.Ino, name string, gitFs *GitFs) fs.InodeEmbedder {
+func defaultNewNode(ino metadata.Ino, name string, gitFs *GitFs) fs.InodeEmbedder {
 	return &Node{
-		inode:      ino,
-		name:       name,
-		DataSource: dataSource,
-		newNodeFn:  defaultNewNode,
-		gitfs:      gitFs,
+		inode:     ino,
+		name:      name,
+		newNodeFn: defaultNewNode,
+		gitfs:     gitFs,
 	}
 }
 
@@ -30,7 +28,6 @@ type Node struct {
 	inode metadata.Ino
 	name  string
 
-	datasource.DataSource
 	newNodeFn NewNodeFn
 
 	gitfs *GitFs
@@ -58,7 +55,7 @@ func (node *Node) Access(ctx context.Context, mask uint32) syscall.Errno {
 			"inode": node.inode,
 		}).Trace("Access")
 
-	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, node.inode)
 	if eno != 0 {
 		return eno
 	}
@@ -77,26 +74,26 @@ func (node *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno
 	out.Frsize = page.PageSize
 	out.Bsize = page.PageSize
 
-	totalInodeCount, err := node.Meta.TotalInodeCount(ctx)
+	totalInodeCount, err := node.gitfs.DefaultDataSource.Meta.TotalInodeCount(ctx)
 	if err != nil {
 		log.WithError(err).Errorf("Statfs failed to get total inode count")
 		return syscall.EIO
 	}
 	out.Files = totalInodeCount
 
-	curInodeCount, err := node.Meta.CurInodeCount(ctx)
+	curInodeCount, err := node.gitfs.DefaultDataSource.Meta.CurInodeCount(ctx)
 	if err != nil {
 		log.WithError(err).Errorf("Statfs failed to get cur inode count")
 		return syscall.EIO
 	}
 	out.Ffree = totalInodeCount - curInodeCount
 
-	useSpace, err := node.Meta.UsedSpace(ctx)
+	useSpace, err := node.gitfs.DefaultDataSource.Meta.UsedSpace(ctx)
 	if err != nil {
 		log.WithError(err).Errorf("Statfs failed to get used space")
 		return syscall.EIO
 	}
-	totalSpace, err := node.Meta.TotalSpace(ctx)
+	totalSpace, err := node.gitfs.DefaultDataSource.Meta.TotalSpace(ctx)
 	if err != nil {
 		log.WithError(err).Errorf("Statfs failed to get total space")
 		return syscall.EIO
@@ -130,14 +127,14 @@ func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string
 		}).Trace("Link")
 
 	targetInode := metadata.Ino(target.EmbeddedInode().StableAttr().Ino)
-	attr, eno := node.Meta.Link(ctx, node.inode, targetInode, name)
+	attr, eno := node.gitfs.DefaultDataSource.Meta.Link(ctx, node.inode, targetInode, name)
 	if eno != syscall.F_OK {
 		return nil, eno
 	}
 
 	metadata.ToAttrOut(targetInode, attr, &out.Attr)
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, targetInode, name, node.gitfs), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(targetInode, name, node.gitfs), fs.StableAttr{
 		Mode: uint32(attr.Mode),
 		Ino:  uint64(targetInode),
 		Gen:  1,
@@ -156,7 +153,7 @@ func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmb
 			"inode":     node.inode,
 		}).Debug("Rename")
 
-	return node.Meta.Rename(ctx, node.inode, name, metadata.Ino(newParentInode), newName)
+	return node.gitfs.DefaultDataSource.Meta.Rename(ctx, node.inode, name, metadata.Ino(newParentInode), newName)
 }
 
 func (node *Node) Opendir(ctx context.Context) syscall.Errno {
@@ -165,7 +162,7 @@ func (node *Node) Opendir(ctx context.Context) syscall.Errno {
 			"inode": node.inode,
 		}).Trace("Opendir")
 
-	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, node.inode)
 	if eno != syscall.F_OK {
 		return eno
 	}
@@ -181,7 +178,7 @@ func (node *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		log.Fields{
 			"parent inode": node.inode,
 		}).Trace("Readdir")
-	ds, err := metadata.NewDirStream(ctx, node.inode, node.Meta)
+	ds, err := metadata.NewDirStream(ctx, node.inode, node.gitfs.DefaultDataSource.Meta)
 	if err != nil {
 		return nil, syscall.ENOENT
 	}
@@ -198,7 +195,7 @@ func (node *Node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOu
 			"inode": node.inode,
 		}).Trace("Getattr")
 
-	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, node.inode)
 	if eno != 0 {
 		return eno
 	}
@@ -212,11 +209,11 @@ func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 			"name":         name,
 			"parent inode": node.inode,
 		}).Trace("Lookup")
-	entry, find, err := node.Meta.GetDentry(ctx, node.inode, name)
+	entry, find, err := node.gitfs.DefaultDataSource.Meta.GetDentry(ctx, node.inode, name)
 	if err != nil || !find {
 		return nil, syscall.ENOENT
 	}
-	attr, eno := node.Meta.Getattr(ctx, entry.Ino)
+	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, entry.Ino)
 	if eno != 0 {
 		return nil, eno
 	}
@@ -225,7 +222,7 @@ func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 
 	//log.Printf("%s %d %o\n", name, entry.Ino, out.Attr.Mode)
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, entry.Ino, name, node.gitfs), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(entry.Ino, name, node.gitfs), fs.StableAttr{
 		Mode: uint32(out.Mode),
 		Ino:  uint64(entry.Ino),
 		Gen:  1,
@@ -240,7 +237,7 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 			"mode":         mode,
 			"parent inode": node.inode,
 		}).Debug("Mkdir")
-	attr, ino, eno := node.Meta.MkNod(ctx, node.inode, metadata.TypeDirectory, name, mode, 0)
+	attr, ino, eno := node.gitfs.DefaultDataSource.Meta.MkNod(ctx, node.inode, metadata.TypeDirectory, name, mode, 0)
 	if eno != 0 {
 		return nil, eno
 	}
@@ -251,7 +248,7 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 			"inode": ino,
 		}).Debug("Mkdir Result")
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name, node.gitfs), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(ino, name, node.gitfs), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
@@ -271,7 +268,7 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 		return nil, syscall.EPERM
 	}
 
-	attr, ino, eno := node.Meta.MkNod(ctx, node.inode, _type, name, mode, dev)
+	attr, ino, eno := node.gitfs.DefaultDataSource.Meta.MkNod(ctx, node.inode, _type, name, mode, dev)
 	if eno != 0 {
 		return nil, eno
 	}
@@ -282,7 +279,7 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 			"inode": ino,
 		}).Debug("Mknod Result")
 
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name, node.gitfs), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(ino, name, node.gitfs), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
@@ -297,7 +294,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 			"mode":         mode,
 			"parent inode": node.inode,
 		}).Debug("Create")
-	attr, ino, eno := node.Meta.MkNod(ctx, node.inode, metadata.TypeFile, name, mode, 0)
+	attr, ino, eno := node.gitfs.DefaultDataSource.Meta.MkNod(ctx, node.inode, metadata.TypeFile, name, mode, 0)
 	if eno != 0 {
 		return nil, 0, 0, eno
 	}
@@ -312,7 +309,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 	if err != nil {
 		return nil, 0, 0, syscall.ENOENT
 	}
-	return node.NewInode(ctx, node.newNodeFn(node.DataSource, ino, name, node.gitfs), fs.StableAttr{
+	return node.NewInode(ctx, node.newNodeFn(ino, name, node.gitfs), fs.StableAttr{
 		Mode: out.Mode,
 		Ino:  uint64(ino),
 		Gen:  1,
@@ -340,7 +337,7 @@ func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 			"name":         name,
 			"parent inode": node.inode,
 		}).Debug("Rmdir")
-	return node.Meta.Rmdir(ctx, node.inode, name)
+	return node.gitfs.DefaultDataSource.Meta.Rmdir(ctx, node.inode, name)
 }
 
 func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -349,7 +346,7 @@ func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 			"name":  name,
 			"inode": node.inode,
 		}).Debug("Unlink")
-	return node.Meta.Unlink(ctx, node.inode, name)
+	return node.gitfs.DefaultDataSource.Meta.Unlink(ctx, node.inode, name)
 }
 
 func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
@@ -381,7 +378,7 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 		return f.(*FileHandler).Setattr(ctx, in, out)
 	}
 
-	attr, eno := node.Meta.Getattr(ctx, node.inode)
+	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, node.inode)
 	if eno != syscall.F_OK {
 		return eno
 	}
@@ -405,7 +402,7 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 		attr.Length = size
 	}
 
-	err := node.Meta.SetattrDirectly(ctx, node.inode, attr)
+	err := node.gitfs.DefaultDataSource.Meta.SetattrDirectly(ctx, node.inode, attr)
 	if err != nil {
 		return syscall.EIO
 	}
