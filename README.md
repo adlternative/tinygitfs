@@ -20,6 +20,7 @@ $ docker run -d --name minio \
 
 # run tinygitfs   
 $ go build
+$ mkdir /tmp/tinygitfs
 $ ./tinygitfs mount /tmp/tinygitfs --metadata="redis://127.0.0.1:6379/2"  --endpoint=http://127.0.0.1:9000 --bucket=gitfs --access_key=minioadmin --secret_key=minioadmin
 $ ls -ali /tmp/tinygitfs
 total 16
