@@ -185,24 +185,6 @@ func (node *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return ds, 0
 }
 
-func (node *Node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	if f != nil {
-		return f.(*FileHandler).Getattr(ctx, out)
-	}
-
-	log.WithFields(
-		log.Fields{
-			"inode": node.inode,
-		}).Trace("Getattr")
-
-	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, node.inode)
-	if eno != 0 {
-		return eno
-	}
-	metadata.ToAttrOut(node.inode, attr, &out.Attr)
-	return 0
-}
-
 func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -349,6 +331,28 @@ func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 	return node.gitfs.DefaultDataSource.Meta.Unlink(ctx, node.inode, name)
 }
 
+// Getattr If a file handle is passed, the Getattr() function of the file handle is called,
+// otherwise the metadata is loaded directly from meta driver
+func (node *Node) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if f != nil {
+		return f.(*FileHandler).Getattr(ctx, out)
+	}
+
+	log.WithFields(
+		log.Fields{
+			"inode": node.inode,
+		}).Trace("Getattr")
+
+	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, node.inode)
+	if eno != 0 {
+		return eno
+	}
+	metadata.ToAttrOut(node.inode, attr, &out.Attr)
+	return 0
+}
+
+// Setattr If a file handle is passed, the Setattr() function of the file handle is called,
+// otherwise the metadata is written directly to the metadata on disk.
 func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	fields := log.Fields{}
 	fields = make(map[string]interface{})
