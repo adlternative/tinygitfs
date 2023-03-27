@@ -48,6 +48,8 @@ var _ = (fs.NodeLinker)((*Node)(nil))
 var _ = (fs.NodeOpener)((*Node)(nil))
 var _ = (fs.NodeStatfser)((*Node)(nil))
 
+// Access check if node can access a file or directory
+// TODO should we use memattr?
 func (node *Node) Access(ctx context.Context, mask uint32) syscall.Errno {
 	log.WithFields(
 		log.Fields{
@@ -69,6 +71,8 @@ func (node *Node) Access(ctx context.Context, mask uint32) syscall.Errno {
 	return syscall.EACCES
 }
 
+// Statfs get file system stat e.g. inode count, storage size...
+// TODO align? Move to Gitfs?
 func (node *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
 	out.NameLen = 255
 	out.Frsize = page.PageSize
@@ -118,6 +122,7 @@ func (node *Node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno
 	return syscall.F_OK
 }
 
+// Link hard link a file to another inode
 func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string, out *fuse.EntryOut) (newNode *fs.Inode, errno syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -141,6 +146,8 @@ func (node *Node) Link(ctx context.Context, target fs.InodeEmbedder, name string
 	}), syscall.F_OK
 }
 
+// Rename a file with name to newParent/newName
+// TODO should we use memattr
 func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	newParentInode := newParent.EmbeddedInode().StableAttr().Ino
 
@@ -156,6 +163,8 @@ func (node *Node) Rename(ctx context.Context, name string, newParent fs.InodeEmb
 	return node.gitfs.DefaultDataSource.Meta.Rename(ctx, node.inode, name, metadata.Ino(newParentInode), newName)
 }
 
+// Opendir open a directory (here we only do a check for directory entry)
+// TODO maybe we should maintenance a open directories in memory?
 func (node *Node) Opendir(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
@@ -173,6 +182,7 @@ func (node *Node) Opendir(ctx context.Context) syscall.Errno {
 	return syscall.F_OK
 }
 
+// Readdir return dirstream which hold a iterator over directory entries
 func (node *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -185,6 +195,7 @@ func (node *Node) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	return ds, 0
 }
 
+// Lookup check file info, and create a fuse node for it
 func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -212,6 +223,7 @@ func (node *Node) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (
 
 }
 
+// Mkdir create a directory, and create a fuse node for it
 func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -237,6 +249,7 @@ func (node *Node) Mkdir(ctx context.Context, name string, mode uint32, out *fuse
 	}), 0
 }
 
+// Mknod create a node, and create a fuse node for it
 func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -268,6 +281,7 @@ func (node *Node) Mknod(ctx context.Context, name string, mode uint32, dev uint3
 	}), 0
 }
 
+// Create a file, and create a fuse node for it
 func (node *Node) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -298,6 +312,7 @@ func (node *Node) Create(ctx context.Context, name string, flags uint32, mode ui
 	}), fileHandler, 0, syscall.F_OK
 }
 
+// Open a file for read/write...
 func (node *Node) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -313,6 +328,7 @@ func (node *Node) Open(ctx context.Context, flags uint32) (fh fs.FileHandle, fus
 	return fh, 0, syscall.F_OK
 }
 
+// Rmdir delete a directory
 func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 	log.WithFields(
 		log.Fields{
@@ -322,6 +338,7 @@ func (node *Node) Rmdir(ctx context.Context, name string) syscall.Errno {
 	return node.gitfs.DefaultDataSource.Meta.Rmdir(ctx, node.inode, name)
 }
 
+// Unlink a file
 func (node *Node) Unlink(ctx context.Context, name string) syscall.Errno {
 	log.WithFields(
 		log.Fields{

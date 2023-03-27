@@ -111,6 +111,7 @@ var _ = (fs.FileReleaser)((*FileHandler)(nil))
 var _ = (fs.FileGetattrer)((*FileHandler)(nil))
 var _ = (fs.FileSetattrer)((*FileHandler)(nil))
 
+// Setattr set the attr to memattr
 func (fh *FileHandler) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	return fh.file.Setattr(ctx, in, out)
 }
@@ -124,6 +125,7 @@ func (fh *FileHandler) getattr(ctx context.Context) (*metadata.Attr, syscall.Err
 	return attr, eno
 }
 
+// Getattr get the attr from meta attr & memattr
 func (fh *FileHandler) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
 	attr, eno := fh.getattr(ctx)
 	if eno != 0 {
@@ -133,6 +135,7 @@ func (fh *FileHandler) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.E
 	return syscall.F_OK
 }
 
+// Release file handler release
 func (fh *FileHandler) Release(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
@@ -147,6 +150,7 @@ func (fh *FileHandler) Release(ctx context.Context) syscall.Errno {
 	return syscall.F_OK
 }
 
+// Fsync sync all file page pool data to file.
 func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 	log.WithFields(
 		log.Fields{
@@ -161,6 +165,8 @@ func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 	return syscall.F_OK
 }
 
+// Flush will be called when file closed. (maybe called many times)
+// We just do fsync here...
 func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
@@ -176,6 +182,7 @@ func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
 	return syscall.F_OK
 }
 
+// Write will write the dest data to file begin at offset
 func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (written uint32, errno syscall.Errno) {
 	log.WithFields(
 		log.Fields{
@@ -193,6 +200,7 @@ func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (writt
 	return written, syscall.F_OK
 }
 
+// Read will read the file data begin at offset to dest, read size no large then dest length
 func (fh *FileHandler) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
