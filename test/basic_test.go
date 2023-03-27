@@ -1,7 +1,9 @@
 package test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,5 +64,50 @@ func TestCreateFile(t *testing.T) {
 		require.Equalf(t, tc.expectSize, fileInfo.Size(), "file size wrong")
 		require.Equalf(t, tc.fileName, fileInfo.Name(), "file name wrong")
 		require.Truef(t, fileInfo.Mode().IsRegular(), "file mode wrong")
+	}
+}
+
+func TestCreateFileWithContent(t *testing.T) {
+	ctx := context.Background()
+
+	testEnv := CreateTestEnvironment(ctx, t)
+	defer testEnv.Cleanup(ctx, t)
+
+	type TestCases = []struct {
+		fileName   string
+		expectSize int64
+		content    []byte
+	}
+	testCases := TestCases{
+		{
+			fileName:   "abc",
+			content:    []byte("test message"),
+			expectSize: 12,
+		},
+		{
+			fileName:   "dfe",
+			content:    []byte("test message2"),
+			expectSize: 13,
+		},
+	}
+	for _, tc := range testCases {
+		fileName := filepath.Join(testEnv.Root(), tc.fileName)
+		file, err := os.Create(fileName)
+		require.NoError(t, err)
+
+		_, err = io.Copy(file, bytes.NewReader(tc.content))
+		require.NoError(t, err)
+
+		require.NoError(t, file.Close())
+
+		fileInfo, err := os.Stat(fileName)
+		require.NoError(t, err)
+		require.Equalf(t, tc.expectSize, fileInfo.Size(), "file size wrong")
+		require.Equalf(t, tc.fileName, fileInfo.Name(), "file name wrong")
+		require.Truef(t, fileInfo.Mode().IsRegular(), "file mode wrong")
+
+		data, err := os.ReadFile(fileName)
+		require.NoError(t, err)
+		require.Equalf(t, tc.content, data, "file data wrong")
 	}
 }
