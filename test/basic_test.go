@@ -12,7 +12,7 @@ import (
 func TestMount(t *testing.T) {
 	ctx := context.Background()
 
-	testStorage := CreateTestEnvironment(ctx, t)
+	testStorage := CreateTestStorage(ctx, t)
 	defer testStorage.Cleanup(ctx, t)
 
 	tempMntDir, err := os.MkdirTemp("/tmp", "tinygitfs-*")
@@ -36,25 +36,8 @@ func TestMount(t *testing.T) {
 func TestCreateFile(t *testing.T) {
 	ctx := context.Background()
 
-	testStorage := CreateTestEnvironment(ctx, t)
-	defer testStorage.Cleanup(ctx, t)
-
-	tempMntDir, err := os.MkdirTemp("/tmp", "tinygitfs-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempMntDir)
-
-	server, err := gitfs.Mount(ctx, tempMntDir, false, "redis://"+testStorage.GetRedisURI(), &data.Option{
-		EndPoint:  "http://" + testStorage.GetMinioURI(),
-		Bucket:    "gitfs",
-		Accesskey: "minioadmin",
-		SecretKey: "minioadmin",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Unmount()
+	testEnv := CreateTestEnvironment(ctx, t)
+	defer testEnv.Cleanup(ctx, t)
 
 	type TestCases = []struct {
 		fileName   string
@@ -71,7 +54,7 @@ func TestCreateFile(t *testing.T) {
 		},
 	}
 	for _, tc := range testCases {
-		fileName := filepath.Join(tempMntDir, tc.fileName)
+		fileName := filepath.Join(testEnv.Root(), tc.fileName)
 		file, err := os.Create(fileName)
 		if err != nil {
 			t.Fatal(err)
