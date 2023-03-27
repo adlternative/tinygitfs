@@ -23,6 +23,12 @@ type Page struct {
 func (p *Page) Truncate(size int64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
+	log.WithFields(
+		log.Fields{
+			"size":   size,
+			"p.size": p.size,
+		}).Debug("Page Truncate")
 	if p.size > size {
 		p.size = size
 		p.clean = false
@@ -71,6 +77,10 @@ func (p *Page) Fsync(ctx context.Context, source *datasource.DataSource, inode m
 			"size":    p.size,
 		}).Debug("Page Fsync")
 
+	if p.size == 0 {
+		return source.Meta.DeleteChunkMeta(ctx, inode, p.pageNumber)
+	}
+
 	// TODO txn
 	path := storagePath(inode, p.pageNumber)
 	err := source.Data.Put(path, bytes.NewReader(p.data[:p.size]))
@@ -78,6 +88,7 @@ func (p *Page) Fsync(ctx context.Context, source *datasource.DataSource, inode m
 		log.WithError(err).Errorf("set chunk data failed")
 		return err
 	}
+
 	err = source.Meta.SetChunkMeta(ctx, inode, p.pageNumber, p.pageNumber*PageSize, int(p.size), path)
 	if err != nil {
 		log.WithError(err).Errorf("set chunk metadata failed")

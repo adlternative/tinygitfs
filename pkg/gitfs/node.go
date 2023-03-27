@@ -376,11 +376,13 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	if size, ok := in.GetSize(); ok {
 		fields["size"] = size
 	}
-	log.WithFields(fields).Debug("Setattr")
 
 	if f != nil {
+		log.WithFields(fields).Debug("File Setattr")
+
 		return f.(*FileHandler).Setattr(ctx, in, out)
 	}
+	log.WithFields(fields).Debug("Node Setattr")
 
 	attr, eno := node.gitfs.DefaultDataSource.Meta.Getattr(ctx, node.inode)
 	if eno != syscall.F_OK {
@@ -407,6 +409,13 @@ func (node *Node) Setattr(ctx context.Context, f fs.FileHandle, in *fuse.SetAttr
 	}
 
 	err := node.gitfs.DefaultDataSource.Meta.SetattrDirectly(ctx, node.inode, attr)
+	if err != nil {
+		return syscall.EIO
+	}
+
+	lastPageNum := int64(attr.Length / page.PageSize)
+	lastPageLength := int(attr.Length % page.PageSize)
+	err = node.gitfs.DefaultDataSource.Meta.TruncateChunkMeta(ctx, node.inode, lastPageNum, lastPageLength)
 	if err != nil {
 		return syscall.EIO
 	}

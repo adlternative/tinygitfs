@@ -511,6 +511,19 @@ func (r *RedisMeta) SetChunkMeta(ctx context.Context, inode Ino, pageNum int64, 
 	return nil
 }
 
+func (r *RedisMeta) DeleteChunkMeta(ctx context.Context, inode Ino, pageNum int64) error {
+	log.WithFields(log.Fields{
+		"inode":   inode,
+		"pageNum": pageNum,
+	}).Debug("Redis DeleteChunkMeta")
+
+	err := r.rdb.HDel(ctx, chunkKey(inode), strconv.FormatInt(pageNum, 10)).Err()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r *RedisMeta) GetChunkMeta(ctx context.Context, inode Ino, pageNum int64) (*ChunkAttr, bool, error) {
 	chunkAttr := &ChunkAttr{}
 

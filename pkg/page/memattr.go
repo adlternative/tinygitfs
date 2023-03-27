@@ -49,13 +49,6 @@ func (memAttr *MemAttr) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fu
 	}
 	if size, ok := in.GetSize(); ok {
 		attr.Length = size
-		if size < attr.Length {
-			// invalid pages
-			err := memAttr.pool.TruncateWithLock(ctx, size)
-			if err != nil {
-				return syscall.EIO
-			}
-		}
 	}
 
 	metadata.ToAttrOut(memAttr.pool.inode, attr, &out.Attr)

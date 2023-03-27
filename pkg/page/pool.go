@@ -67,15 +67,20 @@ func (p *Pool) TruncateWithLock(ctx context.Context, size uint64) error {
 
 	// truncate page pool
 	for _, pageNum := range p.cache.Keys() {
-		if pageNum > lastPageNum || (lastPageLength == 0 && pageNum == lastPageNum) {
-			p.cache.Remove(pageNum)
-		} else if pageNum == lastPageNum {
-			page, ok := p.cache.Peek(pageNum)
-			if !ok {
-				return fmt.Errorf("pagepool cache key %d peek failed", pageNum)
-			}
+		page, ok := p.cache.Peek(pageNum)
+		if !ok {
+			return fmt.Errorf("pagepool cache key %d peek failed", pageNum)
+		}
+		if pageNum > lastPageNum {
 			page.Truncate(int64(lastPageLength))
 		}
+
+		//if pageNum > lastPageNum /* || (lastPageLength == 0 && pageNum == lastPageNum)*/ {
+		//	page.Truncate(0)
+		//	p.cache.Remove(pageNum)
+		//} else if pageNum == lastPageNum {
+		//	page.Truncate(int64(lastPageLength))
+		//}
 	}
 
 	return nil
@@ -299,7 +304,22 @@ func (p *Pool) loadPage(ctx context.Context, pageNum int64) (*Page, bool, error)
 func (p *Pool) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.MemAttr().Setattr(ctx, in, out)
+
+	memAttr := p.MemAttr()
+	curSize := memAttr.attr.Length
+
+	eno := memAttr.Setattr(ctx, in, out)
+	if eno != syscall.F_OK {
+		return eno
+	}
+
+	if size, ok := in.GetSize(); ok && size < curSize {
+		err := p.TruncateWithLock(ctx, size)
+		if err != nil {
+			return syscall.EIO
+		}
+	}
+	return syscall.F_OK
 }
 
 func defaultCheck(key int64) bool {
