@@ -2,11 +2,13 @@ package test
 
 import (
 	"context"
-	"github.com/adlternative/tinygitfs/pkg/data"
-	"github.com/adlternative/tinygitfs/pkg/gitfs"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/adlternative/tinygitfs/pkg/data"
+	"github.com/adlternative/tinygitfs/pkg/gitfs"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMount(t *testing.T) {
@@ -16,10 +18,8 @@ func TestMount(t *testing.T) {
 	defer testStorage.Cleanup(ctx, t)
 
 	tempMntDir, err := os.MkdirTemp("/tmp", "tinygitfs-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(tempMntDir)
+	require.NoError(t, err)
+	defer require.NoError(t, os.RemoveAll(tempMntDir))
 
 	server, err := gitfs.Mount(ctx, tempMntDir, false, "redis://"+testStorage.GetRedisURI(), &data.Option{
 		EndPoint:  "http://" + testStorage.GetMinioURI(),
@@ -27,10 +27,8 @@ func TestMount(t *testing.T) {
 		Accesskey: "minioadmin",
 		SecretKey: "minioadmin",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer server.Unmount()
+	require.NoError(t, err)
+	defer require.NoError(t, server.Unmount())
 }
 
 func TestCreateFile(t *testing.T) {
@@ -56,23 +54,13 @@ func TestCreateFile(t *testing.T) {
 	for _, tc := range testCases {
 		fileName := filepath.Join(testEnv.Root(), tc.fileName)
 		file, err := os.Create(fileName)
-		if err != nil {
-			t.Fatal(err)
-		}
-		file.Close()
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
 
 		fileInfo, err := os.Stat(fileName)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if tc.expectSize != fileInfo.Size() {
-			t.Fatalf("file size not equal")
-		}
-		if tc.fileName != fileInfo.Name() {
-			t.Fatalf("file name not equal")
-		}
-		if !fileInfo.Mode().IsRegular() {
-			t.Fatalf("file is not regular")
-		}
+		require.NoError(t, err)
+		require.Equalf(t, tc.expectSize, fileInfo.Size(), "file size wrong")
+		require.Equalf(t, tc.fileName, fileInfo.Name(), "file name wrong")
+		require.Truef(t, fileInfo.Mode().IsRegular(), "file mode wrong")
 	}
 }

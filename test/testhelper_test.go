@@ -9,6 +9,7 @@ import (
 
 	tcminio "github.com/romnn/testcontainers/minio"
 	tcredis "github.com/romnn/testcontainers/redis"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -36,15 +37,12 @@ func CreateTestStorage(ctx context.Context, t *testing.T) *TestStorage {
 		RootUser:     "minioadmin",
 		RootPassword: "minioadmin",
 	})
-	if err != nil {
-		t.Fatalf("failed to start container: %v", err)
-	}
+	require.NoError(t, err)
+
 	redisC, err := tcredis.Start(ctx, tcredis.Options{
 		ImageTag: "latest",
 	})
-	if err != nil {
-		t.Fatalf("failed to start container: %v", err)
-	}
+	require.NoError(t, err)
 
 	return &TestStorage{
 		minioC: minioC,
@@ -63,24 +61,16 @@ func (te *TestEnv) Root() string {
 }
 
 func (te *TestEnv) Cleanup(ctx context.Context, t *testing.T) {
-	err := te.testServer.Unmount()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, te.testServer.Unmount())
 	te.testStorage.Cleanup(ctx, t)
-	err = os.RemoveAll(te.mntDir)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, os.RemoveAll(te.mntDir))
 }
 
 func CreateTestEnvironment(ctx context.Context, t *testing.T) *TestEnv {
 	testStorage := CreateTestStorage(ctx, t)
 
 	tempMntDir, err := os.MkdirTemp("/tmp", "tinygitfs-*")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	server, err := gitfs.Mount(ctx, tempMntDir, false, "redis://"+testStorage.GetRedisURI(), &data.Option{
 		EndPoint:  "http://" + testStorage.GetMinioURI(),
@@ -88,9 +78,7 @@ func CreateTestEnvironment(ctx context.Context, t *testing.T) *TestEnv {
 		Accesskey: "minioadmin",
 		SecretKey: "minioadmin",
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	return &TestEnv{
 		testStorage: testStorage,
