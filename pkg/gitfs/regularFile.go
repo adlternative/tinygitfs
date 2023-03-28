@@ -3,19 +3,22 @@ package gitfs
 import (
 	"context"
 	"fmt"
-	"sync"
-	"syscall"
-	"time"
-
 	"github.com/adlternative/tinygitfs/pkg/datasource"
 	"github.com/adlternative/tinygitfs/pkg/metadata"
 	"github.com/adlternative/tinygitfs/pkg/page"
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	log "github.com/sirupsen/logrus"
+	"sync"
+	"syscall"
+	"time"
 )
 
-type File struct {
+type RegularFileHandler struct {
+	file *RegularFile
+}
+
+type RegularFile struct {
 	inode    metadata.Ino
 	pagePool *page.Pool
 	ref      int
@@ -25,11 +28,7 @@ type File struct {
 	gitfs       *GitFs
 }
 
-type FileHandler struct {
-	file *File
-}
-
-func NewFile(ctx context.Context, inode metadata.Ino, dataSource *datasource.DataSource, gitFs *GitFs) (*File, error) {
+func NewRegularFile(ctx context.Context, inode metadata.Ino, dataSource *datasource.DataSource, gitFs *GitFs) (*RegularFile, error) {
 	pagePool, err := page.NewPagePool(ctx, dataSource, inode)
 	if err != nil {
 		return nil, err
@@ -52,7 +51,7 @@ func NewFile(ctx context.Context, inode metadata.Ino, dataSource *datasource.Dat
 		}
 	}()
 
-	return &File{
+	return &RegularFile{
 		pagePool:    pagePool,
 		inode:       inode,
 		DataSource:  dataSource,
@@ -62,18 +61,18 @@ func NewFile(ctx context.Context, inode metadata.Ino, dataSource *datasource.Dat
 	}, nil
 }
 
-func (file *File) NewFileHandler() *FileHandler {
+func (file *RegularFile) NewFileHandler() FileHandler {
 	file.mu.Lock()
 	defer file.mu.Unlock()
 
 	file.ref++
 
-	return &FileHandler{
+	return &RegularFileHandler{
 		file: file,
 	}
 }
 
-func (file *File) UnRef(release func()) error {
+func (file *RegularFile) UnRef(release func()) error {
 	file.mu.Lock()
 	defer file.mu.Unlock()
 
@@ -87,36 +86,36 @@ func (file *File) UnRef(release func()) error {
 	return nil
 }
 
-func (file *File) Ref() int {
+func (file *RegularFile) Ref() int {
 	file.mu.Lock()
 	defer file.mu.Unlock()
 
 	return file.ref
 }
 
-func (file *File) Release(ctx context.Context) error {
+func (file *RegularFile) Release(ctx context.Context) error {
 	return file.gitfs.ReleaseFile(ctx, file.inode)
 }
 
-func (file *File) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+func (file *RegularFile) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	return file.pagePool.Setattr(ctx, in, out)
 }
 
-var _ = (fs.FileHandle)((*FileHandler)(nil))
-var _ = (fs.FileWriter)((*FileHandler)(nil))
-var _ = (fs.FileReader)((*FileHandler)(nil))
-var _ = (fs.FileFlusher)((*FileHandler)(nil))
-var _ = (fs.FileFsyncer)((*FileHandler)(nil))
-var _ = (fs.FileReleaser)((*FileHandler)(nil))
-var _ = (fs.FileGetattrer)((*FileHandler)(nil))
-var _ = (fs.FileSetattrer)((*FileHandler)(nil))
+var _ = (fs.FileHandle)((*RegularFileHandler)(nil))
+var _ = (fs.FileWriter)((*RegularFileHandler)(nil))
+var _ = (fs.FileReader)((*RegularFileHandler)(nil))
+var _ = (fs.FileFlusher)((*RegularFileHandler)(nil))
+var _ = (fs.FileFsyncer)((*RegularFileHandler)(nil))
+var _ = (fs.FileReleaser)((*RegularFileHandler)(nil))
+var _ = (fs.FileGetattrer)((*RegularFileHandler)(nil))
+var _ = (fs.FileSetattrer)((*RegularFileHandler)(nil))
 
 // Setattr set the attr to memattr
-func (fh *FileHandler) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+func (fh *RegularFileHandler) Setattr(ctx context.Context, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	return fh.file.Setattr(ctx, in, out)
 }
 
-func (fh *FileHandler) getattr(ctx context.Context) (*metadata.Attr, syscall.Errno) {
+func (fh *RegularFileHandler) getattr(ctx context.Context) (*metadata.Attr, syscall.Errno) {
 	attr, eno := fh.file.Meta.Getattr(ctx, fh.file.inode)
 	if eno != 0 {
 		return nil, eno
@@ -126,7 +125,7 @@ func (fh *FileHandler) getattr(ctx context.Context) (*metadata.Attr, syscall.Err
 }
 
 // Getattr get the attr from meta attr & memattr
-func (fh *FileHandler) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
+func (fh *RegularFileHandler) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
 	attr, eno := fh.getattr(ctx)
 	if eno != 0 {
 		return eno
@@ -136,7 +135,7 @@ func (fh *FileHandler) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.E
 }
 
 // Release file handler release
-func (fh *FileHandler) Release(ctx context.Context) syscall.Errno {
+func (fh *RegularFileHandler) Release(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
 			"inode": fh.file.inode,
@@ -151,7 +150,7 @@ func (fh *FileHandler) Release(ctx context.Context) syscall.Errno {
 }
 
 // Fsync sync all file page pool data to file.
-func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
+func (fh *RegularFileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 	log.WithFields(
 		log.Fields{
 			"flags": flags,
@@ -167,7 +166,7 @@ func (fh *FileHandler) Fsync(ctx context.Context, flags uint32) syscall.Errno {
 
 // Flush will be called when file closed. (maybe called many times)
 // We just do fsync here...
-func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
+func (fh *RegularFileHandler) Flush(ctx context.Context) syscall.Errno {
 	log.WithFields(
 		log.Fields{
 			"inode": fh.file.inode,
@@ -183,7 +182,7 @@ func (fh *FileHandler) Flush(ctx context.Context) syscall.Errno {
 }
 
 // Write will write the dest data to file begin at offset
-func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (written uint32, errno syscall.Errno) {
+func (fh *RegularFileHandler) Write(ctx context.Context, data []byte, off int64) (written uint32, errno syscall.Errno) {
 	log.WithFields(
 		log.Fields{
 			"length": len(data),
@@ -201,7 +200,7 @@ func (fh *FileHandler) Write(ctx context.Context, data []byte, off int64) (writt
 }
 
 // Read will read the file data begin at offset to dest, read size no large then dest length
-func (fh *FileHandler) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (fh *RegularFileHandler) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	log.WithFields(
 		log.Fields{
 			"dest length": len(dest),

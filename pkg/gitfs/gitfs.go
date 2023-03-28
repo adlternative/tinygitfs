@@ -15,13 +15,13 @@ import (
 
 type GitFs struct {
 	*Node
-	files   map[metadata.Ino]*File
+	files   map[metadata.Ino]File
 	filesMu *sync.Mutex
 
 	DefaultDataSource *datasource.DataSource
 }
 
-func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHandler, error) {
+func (gitFs *GitFs) OpenSymRefFile(ctx context.Context, inode metadata.Ino) (FileHandler, error) {
 	var err error
 
 	gitFs.filesMu.Lock()
@@ -29,7 +29,41 @@ func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (*FileHand
 
 	file, ok := gitFs.files[inode]
 	if !ok {
-		file, err = NewFile(ctx, inode, gitFs.DefaultDataSource, gitFs)
+		file, err = NewSymRefFile(ctx, inode, gitFs.DefaultDataSource, gitFs)
+		if err != nil {
+			return nil, err
+		}
+		gitFs.files[inode] = file
+	}
+	return file.NewFileHandler(), nil
+}
+
+func (gitFs *GitFs) OpenRefFile(ctx context.Context, inode metadata.Ino) (FileHandler, error) {
+	var err error
+
+	gitFs.filesMu.Lock()
+	defer gitFs.filesMu.Unlock()
+
+	file, ok := gitFs.files[inode]
+	if !ok {
+		file, err = NewRefFile(ctx, inode, gitFs.DefaultDataSource, gitFs)
+		if err != nil {
+			return nil, err
+		}
+		gitFs.files[inode] = file
+	}
+	return file.NewFileHandler(), nil
+}
+
+func (gitFs *GitFs) OpenFile(ctx context.Context, inode metadata.Ino) (FileHandler, error) {
+	var err error
+
+	gitFs.filesMu.Lock()
+	defer gitFs.filesMu.Unlock()
+
+	file, ok := gitFs.files[inode]
+	if !ok {
+		file, err = NewRegularFile(ctx, inode, gitFs.DefaultDataSource, gitFs)
 		if err != nil {
 			return nil, err
 		}
@@ -71,13 +105,13 @@ func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) 
 	}
 
 	root := &Node{
-		inode:     1,
-		name:      "",
-		newNodeFn: defaultNewNode,
+		nodeType: "Node",
+		inode:    1,
+		name:     "",
 	}
 
 	gitfs := &GitFs{
-		files:   make(map[metadata.Ino]*File),
+		files:   make(map[metadata.Ino]File),
 		filesMu: &sync.Mutex{},
 		Node:    root,
 		DefaultDataSource: &datasource.DataSource{

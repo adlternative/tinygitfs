@@ -128,6 +128,10 @@ func dentryKey(inode Ino) string {
 	return "d" + inode.String()
 }
 
+func refKey(inode Ino) string {
+	return "r" + inode.String()
+}
+
 type ChunkAttr struct {
 	Offset      int64  `json:"offset"`
 	Length      int    `json:"length"`

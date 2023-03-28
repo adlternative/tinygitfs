@@ -590,3 +590,15 @@ func (r *RedisMeta) ReadUpdate(ctx context.Context, inode Ino) syscall.Errno {
 	r.SetattrDirectly(ctx, inode, attr)
 	return syscall.F_OK
 }
+
+func (r *RedisMeta) RefSet(ctx context.Context, inode Ino, value string) error {
+	return r.rdb.Set(ctx, refKey(inode), value, -1).Err()
+}
+
+func (r *RedisMeta) RefGet(ctx context.Context, inode Ino) (string, error) {
+	return r.rdb.Get(ctx, refKey(inode)).Result()
+}
+
+func (r *RedisMeta) RefDel(ctx context.Context, inode Ino) error {
+	return r.rdb.Del(ctx, refKey(inode)).Err()
+}
