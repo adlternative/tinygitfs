@@ -2,22 +2,14 @@ package metadata
 
 import (
 	"context"
+	"fmt"
+	"github.com/go-redis/redis/v8"
+	log "github.com/sirupsen/logrus"
 	"os"
-	"strconv"
+	"runtime/debug"
+	"strings"
 	"syscall"
 	"time"
-
-	"github.com/hanwen/go-fuse/v2/fuse"
-)
-
-const (
-	TypeFile      = 1 // type for regular file
-	TypeDirectory = 2 // type for directory
-	TypeSymlink   = 3 // type for symlink
-	TypeFIFO      = 4 // type for FIFO node
-	TypeBlockDev  = 5 // type for block device
-	TypeCharDev   = 6 // type for character device
-	TypeSocket    = 7 // type for socket
 )
 
 var (
@@ -30,116 +22,94 @@ func init() {
 	gid = os.Getgid()
 }
 
-type Ino int64
-
-type DentryData struct {
-	Ino Ino   `json:"inode"`
-	Typ uint8 `json:"type"`
+type RedisMeta struct {
+	rdb *redis.Client
 }
 
-type Dentry struct {
-	DentryData
-	name string
-}
-
-// Attr is inode attributes information
-type Attr struct {
-	Flags     uint8  `json:"flags,omitempty"`     // reserved flags
-	Typ       uint8  `json:"type,omitempty"`      // type of a node
-	Mode      uint16 `json:"mode,omitempty"`      // permission mode
-	Uid       uint32 `json:"uid,omitempty"`       // owner id
-	Gid       uint32 `json:"gid,omitempty"`       // group id of owner
-	Atime     uint64 `json:"atime,omitempty"`     // last access time
-	Mtime     uint64 `json:"mtime,omitempty"`     // last modified time
-	Ctime     uint64 `json:"ctime,omitempty"`     // last change time for meta
-	Atimensec uint32 `json:"atimensec,omitempty"` // nanosecond part of atime
-	Mtimensec uint32 `json:"mtimensec,omitempty"` // nanosecond part of mtime
-	Ctimensec uint32 `json:"ctimensec,omitempty"` // nanosecond part of ctime
-	Nlink     uint32 `json:"nlink,omitempty"`     // number of links (sub-directories or hardlinks)
-	Length    uint64 `json:"length,omitempty"`    // length of regular file
-	Rdev      uint32 `json:"rdev,omitempty"`      // device number
-}
-
-type DirStream struct {
-	ino  Ino
-	meta *RedisMeta
-
-	totalCnt int
-	curPos   int
-
-	dentries []*Dentry
-}
-
-func GetFiletype(mode uint16) uint8 {
-	switch mode & (syscall.S_IFMT & 0xffff) {
-	case syscall.S_IFIFO:
-		return TypeFIFO
-	case syscall.S_IFSOCK:
-		return TypeSocket
-	case syscall.S_IFLNK:
-		return TypeSymlink
-	case syscall.S_IFREG:
-		return TypeFile
-	case syscall.S_IFBLK:
-		return TypeBlockDev
-	case syscall.S_IFDIR:
-		return TypeDirectory
-	case syscall.S_IFCHR:
-		return TypeCharDev
+// NewRedisMeta create a new meta instenance
+func NewRedisMeta(url string) (*RedisMeta, error) {
+	rdb, err := newRedisClient(url)
+	if err != nil {
+		return nil, err
 	}
-	return TypeFile
+
+	return &RedisMeta{
+		rdb: rdb,
+	}, nil
 }
 
-func TypeToStatType(_type uint8) uint32 {
-	switch _type & 0x7F {
-	case TypeDirectory:
-		return syscall.S_IFDIR
-	case TypeSymlink:
-		return syscall.S_IFLNK
-	case TypeFile:
-		return syscall.S_IFREG
-	case TypeFIFO:
-		return syscall.S_IFIFO
-	case TypeSocket:
-		return syscall.S_IFSOCK
-	case TypeBlockDev:
-		return syscall.S_IFBLK
-	case TypeCharDev:
-		return syscall.S_IFCHR
-	default:
-		panic(_type)
+func (r *RedisMeta) Init(ctx context.Context) error {
+	rootInode := Ino(1)
+
+	// have initialed
+	if _, err := r.rdb.Get(context.Background(), inodeKey(rootInode)).Result(); err == nil {
+		return nil
 	}
+
+	rootAttr := &Attr{
+		Typ:    TypeDirectory,
+		Mode:   uint16(0755),
+		Nlink:  2,
+		Length: 4 << 10,
+		Uid:    uint32(uid),
+		Gid:    uint32(gid),
+	}
+	ts := time.Now()
+	SetTime(&rootAttr.Atime, &rootAttr.Atimensec, ts)
+	SetTime(&rootAttr.Mtime, &rootAttr.Mtimensec, ts)
+	SetTime(&rootAttr.Ctime, &rootAttr.Ctimensec, ts)
+
+	// root attr 序列化后写到 i1
+	err := r.SetattrDirectly(ctx, rootInode, rootAttr)
+	if err != nil {
+		return err
+	}
+	r.SetTotalInodeCount(ctx, 1<<30)
+	if err != nil {
+		return err
+	}
+	r.SetTotalSpace(ctx, 1<<30)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
-// SMode is the file mode including type and unix permission.
-func (a Attr) SMode() uint32 {
-	return TypeToStatType(a.Typ) | uint32(a.Mode)
+func newRedisClient(url string) (*redis.Client, error) {
+	opt, err := redis.ParseURL(url)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %s", url, err)
+	}
+	if opt.Password == "" && os.Getenv("REDIS_PASSWORD") != "" {
+		opt.Password = os.Getenv("REDIS_PASSWORD")
+	}
+
+	opt.MaxRetries = 3
+	opt.MinRetryBackoff = time.Millisecond * 100
+	opt.MaxRetryBackoff = time.Minute * 1
+	opt.ReadTimeout = time.Second * 30
+	opt.WriteTimeout = time.Second * 5
+
+	return redis.NewClient(opt), nil
 }
 
-func (i Ino) String() string {
-	return strconv.FormatUint(uint64(i), 10)
-}
+func errno(err error) syscall.Errno {
+	if err == nil {
+		return 0
+	}
+	if eno, ok := err.(syscall.Errno); ok {
+		return eno
+	}
+	if err == redis.Nil {
+		return syscall.ENOENT
+	}
 
-func inodeKey(inode Ino) string {
-	return "i" + inode.String()
-}
-
-func dentryKey(inode Ino) string {
-	return "d" + inode.String()
-}
-
-func refKey(inode Ino) string {
-	return "r" + inode.String()
-}
-
-type ChunkAttr struct {
-	Offset      int64  `json:"offset"`
-	Length      int    `json:"length"`
-	StoragePath string `json:"storagePath"`
-}
-
-func chunkKey(inode Ino) string {
-	return "c" + inode.String()
+	debug.PrintStack()
+	log.WithError(err).Error("meet bad error")
+	if strings.HasPrefix(err.Error(), "OOM") {
+		return syscall.ENOSPC
+	}
+	return syscall.EIO
 }
 
 // SetTime set given time and timesec to given time.Time
@@ -153,90 +123,4 @@ func SetTime(time *uint64, timensec *uint32, t time.Time) {
 	if timensec != nil {
 		*timensec = nsec
 	}
-}
-
-func ToAttrOut(ino Ino, attr *Attr, out *fuse.Attr) {
-	out.Ino = uint64(ino)
-	out.Uid = attr.Uid
-	out.Gid = attr.Gid
-	out.Mode = attr.SMode()
-	out.Nlink = attr.Nlink
-	out.Atime = attr.Atime
-	out.Atimensec = attr.Atimensec
-	out.Mtime = attr.Mtime
-	out.Mtimensec = attr.Mtimensec
-	out.Ctime = attr.Ctime
-	out.Ctimensec = attr.Ctimensec
-
-	var size, blocks uint64
-	switch attr.Typ {
-	case TypeDirectory:
-		fallthrough
-	case TypeSymlink:
-		fallthrough
-	case TypeFile:
-		size = attr.Length
-		blocks = (size + 511) >> 9
-	case TypeBlockDev:
-		fallthrough
-	case TypeCharDev:
-		out.Rdev = attr.Rdev
-	}
-	out.Size = size
-	out.Blocks = blocks
-	setBlksize(out, 0x10000) //64K
-}
-
-func CopySomeAttr(src, dst *Attr) {
-	dst.Length = src.Length
-	dst.Atime = src.Length
-	dst.Atimensec = src.Atimensec
-	dst.Ctime = src.Length
-	dst.Ctimensec = src.Ctimensec
-	dst.Gid = src.Gid
-	dst.Uid = src.Uid
-	dst.Mode = src.Mode
-}
-
-func NewDirStream(ctx context.Context, ino Ino, meta *RedisMeta) (*DirStream, error) {
-	ds := &DirStream{
-		ino:    ino,
-		curPos: 0,
-		meta:   meta,
-	}
-	dentries, err := meta.GetAllDentries(ctx, ino)
-	if err != nil {
-		return nil, err
-	}
-	ds.dentries = dentries
-	ds.totalCnt = len(dentries)
-
-	return ds, nil
-}
-
-func (ds *DirStream) HasNext() bool {
-	return ds.curPos < ds.totalCnt
-}
-
-func (ds *DirStream) Next() (de fuse.DirEntry, eno syscall.Errno) {
-	ctx := context.TODO()
-
-	if ds.curPos > ds.totalCnt {
-		return de, syscall.EIO
-	}
-
-	dentry := ds.dentries[ds.curPos]
-	de.Name = dentry.name
-	de.Ino = uint64(dentry.Ino)
-	attr, eno := ds.meta.Getattr(ctx, dentry.Ino)
-	if eno != 0 {
-		return de, eno
-	}
-	de.Mode = uint32(attr.Mode)
-	ds.curPos++
-	return
-}
-
-func (ds *DirStream) Close() {
-	// nothing
 }
