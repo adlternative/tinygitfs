@@ -36,6 +36,7 @@ var mountCmd = &cobra.Command{
 		server, err := gitfs.Mount(ctx, args[0], debug, metadataUrl, &dataOption)
 		if err != nil {
 			log.WithError(err).Errorf("gitfs mount failed")
+			cancel()
 			return
 		}
 
