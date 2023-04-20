@@ -37,3 +37,6 @@ total 16
    57 drwxr-xr-x   5 adl   staff  4096 Jan  7 17:04 d4
    60 -rw-r--r--   1 adl   staff     0 Jan  7 18:06 f3
 ```
+
+#### architecture
+![img.png](doc/resource/arch.png)
