@@ -6,6 +6,7 @@ import (
 	"github.com/adlternative/tinygitfs/pkg/gitfs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"os"
+	"strings"
 
 	tcminio "github.com/romnn/testcontainers/minio"
 	tcredis "github.com/romnn/testcontainers/redis"
@@ -19,11 +20,11 @@ type TestStorage struct {
 }
 
 func (ts *TestStorage) GetMinioURI() string {
-	return ts.minioC.ConnectionURI()
+	return strings.ReplaceAll(ts.minioC.ConnectionURI(), "localhost", "127.0.0.1")
 }
 
 func (ts *TestStorage) GetRedisURI() string {
-	return ts.redisC.ConnectionURI()
+	return strings.ReplaceAll(ts.redisC.ConnectionURI(), "localhost", "127.0.0.1")
 }
 
 func (ts *TestStorage) Cleanup(ctx context.Context, t *testing.T) {

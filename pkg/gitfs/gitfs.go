@@ -88,20 +88,20 @@ func (gitFs *GitFs) ReleaseFile(ctx context.Context, inode metadata.Ino) error {
 func NewGitFs(ctx context.Context, metaDataUrl string, dataOption *data.Option) (*GitFs, error) {
 	Meta, err := metadata.NewRedisMeta(metaDataUrl)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NewRedisMeta failed with %w", err)
 	}
 	err = Meta.Init(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("meta init failed with %w", err)
 	}
 
 	minioData, err := data.NewMinioData(dataOption)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NewMinioData failed with %w", err)
 	}
 	err = minioData.Init()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("minioData init failed with %w", err)
 	}
 
 	root := &Node{
@@ -129,7 +129,7 @@ func Mount(ctx context.Context, mntDir string, debug bool, metaDataUrl string, d
 
 	gitfs, err := NewGitFs(ctx, metaDataUrl, dataOption)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("NewGitFs failed with %w", err)
 	}
 
 	opts := fuse.MountOptions{

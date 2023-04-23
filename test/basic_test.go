@@ -21,7 +21,9 @@ func TestMount(t *testing.T) {
 
 	tempMntDir, err := os.MkdirTemp("/tmp", "tinygitfs-*")
 	require.NoError(t, err)
-	defer require.NoError(t, os.RemoveAll(tempMntDir))
+	defer func() {
+		require.NoError(t, os.RemoveAll(tempMntDir))
+	}()
 
 	server, err := gitfs.Mount(ctx, tempMntDir, false, "redis://"+testStorage.GetRedisURI(), &data.Option{
 		EndPoint:  "http://" + testStorage.GetMinioURI(),
@@ -30,7 +32,9 @@ func TestMount(t *testing.T) {
 		SecretKey: "minioadmin",
 	})
 	require.NoError(t, err)
-	defer require.NoError(t, server.Unmount())
+	defer func() {
+		require.NoError(t, server.Unmount())
+	}()
 }
 
 func TestCreateFile(t *testing.T) {
@@ -106,8 +110,8 @@ func TestCreateFileWithContent(t *testing.T) {
 		require.Equalf(t, tc.fileName, fileInfo.Name(), "file name wrong")
 		require.Truef(t, fileInfo.Mode().IsRegular(), "file mode wrong")
 
-		data, err := os.ReadFile(fileName)
+		content, err := os.ReadFile(fileName)
 		require.NoError(t, err)
-		require.Equalf(t, tc.content, data, "file data wrong")
+		require.Equalf(t, tc.content, content, "file data wrong")
 	}
 }
