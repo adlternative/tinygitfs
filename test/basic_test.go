@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestMount(t *testing.T) {
@@ -160,6 +161,7 @@ func TestGitInit(t *testing.T) {
 			checkBareRepoExists(t, fmt.Sprintf("%s/.git", repoPath))
 		}
 	}
+	time.Sleep(10 * time.Second)
 }
 
 func TestGitAdd(t *testing.T) {
@@ -213,6 +215,63 @@ func TestGitAdd(t *testing.T) {
 
 		require.Equal(t, contentBuf.Bytes(), tc.content)
 	}
+	time.Sleep(10 * time.Second)
+}
+
+func TestGitCommit(t *testing.T) {
+	ctx := context.Background()
+
+	testEnv := CreateTestEnvironment(ctx, t)
+
+	log.Debugf("test dir: %s", testEnv.Root())
+	defer testEnv.Cleanup(ctx, t)
+
+	repoName := "test-repo"
+
+	type TestCases = []struct {
+		fileName    string
+		fileContent []byte
+
+		commitMessage string
+	}
+	testCases := TestCases{
+		{
+			fileName:      "test-file-1",
+			fileContent:   []byte("test-message"),
+			commitMessage: "hello world\n",
+		},
+		{
+			fileName:      "test-file-2",
+			fileContent:   []byte("test-message-2"),
+			commitMessage: "hello world2\n",
+		},
+	}
+
+	repoPath := filepath.Join(testEnv.Root(), repoName)
+
+	for _, tc := range testCases {
+		gitInit(ctx, t, repoPath)
+		gitAdd(ctx, t, repoPath, tc.fileName, tc.fileContent)
+		gitCommit(ctx, t, repoPath, tc.commitMessage)
+
+		var contentBuf strings.Builder
+		gitDir := path.Join(repoPath, ".git")
+		gitCmd := cmd.NewGitCommand("log").WithGitDir(gitDir).
+			WithOptions("--pretty=%s", "--max-count=1").WithArgs("HEAD").WithStdout(&contentBuf)
+
+		require.NoError(t, gitCmd.Start(ctx))
+		require.NoError(t, gitCmd.Wait())
+		require.Equal(t, contentBuf.String(), tc.commitMessage)
+	}
+}
+
+func gitCommit(ctx context.Context, t *testing.T, repoPath string, commitMessage string) {
+	gitDir := path.Join(repoPath, ".git")
+	gitCmd := cmd.NewGitCommand("commit").WithGitDir(gitDir).WithWorkTree(repoPath).
+		WithOptions(fmt.Sprintf("--message=%s", commitMessage))
+
+	require.NoError(t, gitCmd.Start(ctx))
+	require.NoError(t, gitCmd.Wait())
 }
 
 func gitAdd(ctx context.Context, t *testing.T, repoPath string, fileName string, content []byte) {
