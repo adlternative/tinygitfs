@@ -3,14 +3,18 @@ package test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	log "github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/require"
+
+	"github.com/adlternative/tinygitfs/pkg/cmd"
 	"github.com/adlternative/tinygitfs/pkg/data"
 	"github.com/adlternative/tinygitfs/pkg/gitfs"
-	"github.com/stretchr/testify/require"
 )
 
 func TestMount(t *testing.T) {
@@ -114,4 +118,53 @@ func TestCreateFileWithContent(t *testing.T) {
 		require.NoError(t, err)
 		require.Equalf(t, tc.content, content, "file data wrong")
 	}
+}
+
+func TestGitInit(t *testing.T) {
+	ctx := context.Background()
+
+	testEnv := CreateTestEnvironment(ctx, t)
+
+	log.Debugf("test dir: %s", testEnv.Root())
+	defer testEnv.Cleanup(ctx, t)
+
+	type TestCases = []struct {
+		repoName string
+		bare     bool
+	}
+	testCases := TestCases{
+		{
+			repoName: "test-repo-1",
+		},
+		{
+			repoName: "test-repo-2",
+		},
+	}
+	for _, tc := range testCases {
+		repoPath := filepath.Join(testEnv.Root(), tc.repoName)
+
+		gitCmd := cmd.NewGitCommand("init").WithArgs(repoPath)
+
+		if tc.bare {
+			gitCmd.WithOptions("--bare")
+		}
+
+		require.NoError(t, gitCmd.Start(ctx))
+		require.NoError(t, gitCmd.Wait())
+
+		if tc.bare {
+			checkBareRepoExists(t, repoPath)
+		} else {
+			require.DirExists(t, repoPath)
+			checkBareRepoExists(t, fmt.Sprintf("%s/.git", repoPath))
+		}
+	}
+}
+
+func checkBareRepoExists(t *testing.T, repoPath string) {
+	require.DirExists(t, repoPath)
+	require.DirExists(t, fmt.Sprintf("%s/objects", repoPath))
+	require.DirExists(t, fmt.Sprintf("%s/refs", repoPath))
+	require.FileExists(t, fmt.Sprintf("%s/HEAD", repoPath))
+	require.FileExists(t, fmt.Sprintf("%s/config", repoPath))
 }
