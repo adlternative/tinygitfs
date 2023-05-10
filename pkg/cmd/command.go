@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
-
-	log "github.com/sirupsen/logrus"
 )
 
 type Command struct {
@@ -75,6 +73,11 @@ func (c *Command) WithGitDir(gitDir string) *Command {
 	return c
 }
 
+func (c *Command) WithWorkTree(worktree string) *Command {
+	c.preOptions = append(c.preOptions, fmt.Sprintf("--work-tree=%s", worktree))
+	return c
+}
+
 func (c *Command) Start(ctx context.Context) error {
 	var trueArgs []string
 
@@ -118,7 +121,7 @@ func (c *Command) Start(ctx context.Context) error {
 		c.cmd.Env = append(c.cmd.Env, c.envs...)
 	}
 
-	log.Debug("git command: ", c.cmd.String())
+	fmt.Println("git command: ", c.cmd.String())
 
 	err := c.cmd.Start()
 	if err != nil {
